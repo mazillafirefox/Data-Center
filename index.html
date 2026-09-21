@@ -535,7 +535,7 @@ body.pm-dragging{user-select:none}
 </div>
 
 <script>
-const BUILD='2026-09-21 10:30';
+const BUILD='2026-09-21 11:40';
 /* Boundaries from the Royal Thai Survey Department administrative set
    (ADM1 provinces, ADM2 districts), simplified along shared borders so
    neighbouring shapes meet exactly rather than leaving white slivers.
@@ -3037,6 +3037,20 @@ function chartTheme(){ if(typeof Chart==='undefined') return;
   gridX={grid:{display:false},border:{display:false}}; gridY={grid:{color:CSSV('--grid')},border:{display:false}}; }
 const clickPick=(key)=>(e,els,ch)=>{ if(!els.length) return; const lb=ch.data.labels[els[0].index]; GF[key]=GF[key]===lb?null:lb; render(); };
 
+let USAGE_CHART=null;
+function drawUsage(){ const d=USAGE_CHART; if(!d||!document.getElementById('cUsageStock')) return;
+  const lineCol=PAL[3];
+  chart('cUsageStock',{type:'bar',data:{labels:d.labels,datasets:[
+      {type:'bar',label:'Packs used',data:d.used,backgroundColor:PAL[0],borderRadius:3,barPercentage:.8,categoryPercentage:.7,order:2},
+      {type:'bar',label:'Packs delivered',data:d.got,backgroundColor:'#B9BEC2',borderRadius:3,barPercentage:.8,categoryPercentage:.7,order:3},
+      {type:'line',label:d.hasStock?'Estimated stock':'Running movement',data:d.line,borderColor:lineCol,backgroundColor:lineCol,
+        borderWidth:2,pointRadius:2.5,tension:.25,order:1,borderDash:d.hasStock?[]:[5,4],
+        segment:{borderColor:c=>(c.p1.parsed.y<0||c.p0.parsed.y<0)?PAL[0]:lineCol}}]},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+      plugins:{legend:{display:true,position:'bottom',labels:{boxWidth:10,boxHeight:10}},
+        tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${fmtN(c.parsed.y,1)} packs`}}},
+      scales:{x:gridX,y:{...gridY,title:{display:true,text:'packs'}}}}});
+}
 /* ═══════════ OVERVIEW ═══════════ */
 function pageDash(){
   const S=scope(), ib=S.machines, act=ib.filter(r=>r.active==='Yes');
@@ -5814,6 +5828,25 @@ function pageUsage(){
     const earlier=rows.filter(r=>r.before);
     let run=0; counted.forEach(r=>{ run+=r.packs-r.used; r.windowBalance=run; });
     const last=counted[counted.length-1]||{};
+    /* Deliveries minus use only ever gives the movement. A single shelf count —
+       taken on a visit, at the end of a month — pins it down, and from there the
+       stock can be worked forwards and backwards month by month. */
+    const sc=((DB.master&&DB.master.stockCounts)||{})[pick]||null;
+    if(sc&&sc.period&&isFinite(+sc.packs)){
+      const diff={}; forAcct.filter(r=>!r.before).forEach(r=>{ diff[r.period]=(diff[r.period]||0)+r.packs-r.used; });
+      const ps=Object.keys(diff).sort();
+      const at=m=> m>=sc.period
+        ? +sc.packs+ps.filter(p=>p>sc.period&&p<=m).reduce((s,p)=>s+diff[p],0)
+        : +sc.packs-ps.filter(p=>p>m&&p<=sc.period).reduce((s,p)=>s+diff[p],0);
+      counted.forEach(r=>{ r.stock=at(r.period); });
+    }
+    const hasStock=!!(sc&&counted.some(r=>r.stock!=null));
+    /* months of cover: what is on the shelf against the pace of the last three months */
+    const recentUse=counted.slice(-3).reduce((s,r)=>s+r.used,0)/Math.max(1,Math.min(3,counted.length));
+    const nowStock=hasStock?(counted[counted.length-1]||{}).stock:null;
+    const cover=hasStock&&recentUse>0?nowStock/recentUse:null;
+    USAGE_CHART={labels:counted.map(r=>r.period),used:counted.map(r=>+r.used.toFixed(1)),
+      got:counted.map(r=>r.packs),line:counted.map(r=>+(hasStock?r.stock:r.windowBalance).toFixed(1)),hasStock};
     const totUsed=counted.reduce((s,r)=>s+r.used,0), totGot=counted.reduce((s,r)=>s+r.packs,0);
     const worst=counted.filter(r=>r.windowBalance<0);
     return `<h4 class="sec">Consumption against deliveries</h4>
@@ -5831,17 +5864,36 @@ function pageUsage(){
     <div class="grid kpis">
       ${kpi('Packs consumed',fmtN(totUsed,1),`${fmtN(rows.reduce((s,r)=>s+r.cuts,0),0)} cuts on record`,'')}
       ${kpi('Packs delivered',fmtN(totGot,0),`${fmtN(rows.reduce((s,r)=>s+r.boxes,0),1)} boxes invoiced`,'n2')}
-      ${kpi('Movement over the period',fmtN(last.windowBalance||0,1),
-        (last.windowBalance||0)<0?'consumption ran ahead of deliveries':'deliveries ran ahead of consumption',
-        (last.windowBalance||0)<0?'n5':'n6')}
+      ${hasStock
+        ? kpi('Estimated stock now',fmtN(nowStock,1)+' packs',
+            nowStock<0?'more used than delivered since the count — a delivery is missing, or count again'
+            :cover!=null?`about ${fmtN(cover,1)} month${Math.abs(cover-1)<.05?'':'s'} at the recent pace`:'no recent use to measure against',
+            nowStock<0?'n5':cover!=null&&cover<1?'n3':'n6')
+        : kpi('Movement over the period',fmtN(last.windowBalance||0,1),
+            (last.windowBalance||0)<0?'consumption ran ahead of deliveries':'deliveries ran ahead of consumption',
+            (last.windowBalance||0)<0?'n5':'n6')}
       ${kpi('Months in deficit',worst.length,worst.length?`earliest ${esc(worst[0].period)}`:'never short on paper','n3')}
     </div>
+    <div class="card" style="margin-top:14px"><header><h3>${hasStock?'Used, delivered and estimated stock':'Used and delivered each month'}</h3></header>
+      <div class="body"><div class="chart-wrap" style="height:260px"><canvas id="cUsageStock"></canvas></div>
+      <div class="toolbar" style="margin:12px 0 0;padding:0">
+        <b style="font-size:12px">Last shelf count</b>
+        <span class="mini">packs on hand at the end of</span>
+        <input type="month" class="f" id="scMonth" value="${esc(sc?sc.period:(to||''))}" style="width:132px">
+        <input type="number" class="f" id="scPacks" min="0" step="1" value="${sc?esc(sc.packs):''}" placeholder="packs" style="width:92px">
+        <button class="btn sm pri" id="scSave">${sc?'Update':'Record the count'}</button>
+        ${sc?`<button class="btn sm" id="scClear">Remove</button><span class="mini">${esc(sc.by?('counted by '+shortWho(sc.by)+' · '):'')}${esc(sc.period)}</span>`:''}
+      </div>
+      <div class="mini" style="margin-top:6px">${hasStock
+        ?'The line is worked out from that count: each month adds what was delivered and takes off what the machines used. Count again on a visit whenever the line and the shelf disagree.'
+        :'Without a count the line only shows the movement, starting from zero. Count the boxes on the shelf on your next visit and enter it here to turn it into an estimate of real stock.'}</div>
+      </div></div>
     <div class="note" style="margin-top:12px">The running figure is the movement across the period on show, not a stock count: what sat on the shelf beforehand is not recorded anywhere. A steady line means deliveries and consumption are in step; a line falling month after month is the one worth investigating.
       ${earlier.length?`<br>${fmtN(earlier.reduce((s,r)=>s+r.packs,0),0)} packs were delivered before the first treatment reading and are listed but not counted.`:''}</div>
     <div class="card" style="margin-top:14px"><div class="tbl-scroll" style="max-height:340px">
       <table class="sticky-first"><thead><tr>
         <th>Month</th><th class="n">Cuts</th><th class="n">Packs used</th>
-        <th class="n">Boxes in</th><th class="n">Packs in</th><th class="n">Difference</th><th class="n">Running balance</th><th>Reading</th></tr></thead><tbody>
+        <th class="n">Boxes in</th><th class="n">Packs in</th><th class="n">Difference</th><th class="n">Running balance</th>${hasStock?'<th class="n">Est. stock</th>':''}<th>Reading</th></tr></thead><tbody>
         ${rows.map(r=>{ const diff=r.packs-r.used;
           return `<tr class="${r.before?'rowoff':(r.windowBalance<0?'istoday':'')}">
           <td class="mono">${esc(r.period)}</td>
@@ -5851,6 +5903,7 @@ function pageUsage(){
           <td class="num">${r.packs?fmtN(r.packs,0):'—'}</td>
           <td class="num">${diff?`<span class="${diff<0?'neg':''}">${diff>0?'+':''}${fmtN(diff,1)}</span>`:'—'}</td>
           <td class="num">${r.before?'<span class="mini">—</span>':`<b>${fmtN(r.windowBalance,1)}</b>`}</td>
+          ${hasStock?`<td class="num">${r.stock==null?'—':`<b class="${r.stock<0?'neg':''}">${fmtN(r.stock,1)}</b>`}</td>`:''}
           <td>${r.before?'<span class="mini">before the readings start</span>'
             :!r.cuts?'<span class="mini">no readings</span>'
             :!r.packs&&r.windowBalance<0?'<span class="tag bad">used, nothing delivered</span>'
@@ -6242,7 +6295,7 @@ function render(){
       <div class="toolbar"><button class="btn" data-p="data">Open Data &amp; Quality</button>
         <button class="btn" id="expJson">Download a JSON backup</button></div>`; }
   requestAnimationFrame(()=>{ try{ if(page==='dash')drawDash(); if(page==='analytics')drawAnalytics(); if(page==='pipe')drawPipe();
-    if(page==='orders')drawOrders(); if(page==='packan')drawPackAnalytics();
+    if(page==='orders')drawOrders(); if(page==='packan')drawPackAnalytics(); if(page==='usage')drawUsage();
     if(page==='market'){ drawMarket(); document.querySelectorAll('.map-wrap').forEach(w=>applyMapView(w)); }
     warnBar();
     if(page==='planner') planDragging();
@@ -7714,6 +7767,14 @@ document.addEventListener('click',e=>{
   if(e.target.id==='planAdd'){ openForm('plan',null,{date:(planMonth||thisMonth())+'-01'}); return; }
   if(e.target.id==='planBuild'){ roundDialog(); return; }
   if(e.target.id==='planRounds'){ roundsDialog(); return; }
+  if(e.target.id==='scSave'||e.target.id==='scClear'){
+    const acct=(document.getElementById('usageAcct')||{}).value; if(!acct) return;
+    DB.master.stockCounts=DB.master.stockCounts||{};
+    if(e.target.id==='scClear'){ delete DB.master.stockCounts[acct]; save(); render(); toast('Shelf count removed'); return; }
+    const m=document.getElementById('scMonth').value, n=document.getElementById('scPacks').value;
+    if(!m||n===''||!isFinite(+n)||+n<0){ toast('Enter the month and the number of packs counted'); return; }
+    DB.master.stockCounts[acct]={period:m,packs:+n,by:(Auth.profile&&Auth.profile.email)||'',at:new Date().toISOString()};
+    save(); render(); toast(`Stock for ${acct} now worked out from ${n} packs at the end of ${monthName(m)}`); return; }
   const rd=e.target.closest('[data-delround]');
   if(rd){ const id=rd.dataset.delround;
     const all=(DB.plans||[]).map(CFG.plan.compute).filter(p=>p.roundId===id);
