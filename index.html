@@ -535,7 +535,7 @@ body.pm-dragging{user-select:none}
 </div>
 
 <script>
-const BUILD='2026-09-11 06:47';
+const BUILD='2026-09-21 10:30';
 /* Boundaries from the Royal Thai Survey Department administrative set
    (ADM1 provinces, ADM2 districts), simplified along shared borders so
    neighbouring shapes meet exactly rather than leaving white slivers.
@@ -4861,6 +4861,13 @@ function printSheet(html,title,fileName){
 const isSigned=v=>!!(v&&(v.sigCustomer||v.sigPath));
 const reportNo=v=>'SR-'+String(v.date||'').replace(/-/g,'').slice(2)+'-'+String(v.serial||'').slice(-4)+'-'+String(v.id||'').slice(-3).toUpperCase();
 function signPad(v){
+  /* The person met is usually the person who signs, and their contact record
+     already says what they do — so the position is filled in rather than left
+     for someone to type with the customer waiting. */
+  const signer=contactByLabel(v.signedBy||v.contact);
+  const people=(()=>{ const m=DB.installedBase.find(x=>x.serial===v.serial)||{};
+    const l=locById(m.locationId)||{};
+    return (DB.contacts||[]).filter(c=>c.status!=='Left'&&(c.accountId===l.accountId||worksAt(c,m.locationId))); })();
   const ov=document.createElement('div'); ov.className='ov';
   const pad=(id,label,sub)=>`<div class="sigblk">
       <div class="sighead"><label>${label}</label><span class="mini">${sub}</span>
@@ -4876,9 +4883,11 @@ function signPad(v){
         The signing area stays white in either theme, so what is signed is exactly what prints.</div>
       <div class="fgrid" style="margin-top:14px">
         <div class="fld"><label>Signed by</label>
-          <input id="sgName" value="${esc(v.signedBy||v.contact||'')}" placeholder="Name of the person signing"></div>
+          <input id="sgName" list="sgPeople" autocomplete="off" value="${esc(v.signedBy||(signer?signer.name:String(v.contact||'').split(' · ')[0]))}" placeholder="Name of the person signing">
+          <datalist id="sgPeople">${people.map(c=>`<option value="${esc(c.name)}">${esc(c.role||'')}</option>`).join('')}</datalist></div>
         <div class="fld"><label>Position</label>
-          <input id="sgRole" value="${esc(v.signedRole||'')}" placeholder="e.g. Head nurse, Biomedical engineer"></div>
+          <input id="sgRole" value="${esc(v.signedRole||(signer&&signer.role)||'')}" data-auto="${v.signedRole?'0':'1'}" placeholder="e.g. Head nurse, Biomedical engineer">
+          <span class="hint">Taken from the contact record — change it if they sign in another capacity</span></div>
       </div>
       ${pad('sgCust','Customer signature','finger, stylus or a photo')}
       ${pad('sgEng','Ziemer engineer'+(v.engineer?' · '+esc(asText(v.engineer)):''),'optional')}
@@ -4893,6 +4902,12 @@ function signPad(v){
     <footer><button class="btn" data-x>Cancel</button><button class="btn pri" data-ok>Save the signatures</button></footer></div>`;
   document.body.appendChild(ov);
   ov.addEventListener('selectstart',e=>{ if(e.target.closest('.sigblk')) e.preventDefault(); });
+  const roleEl=ov.querySelector('#sgRole');
+  roleEl.addEventListener('input',()=>{ roleEl.dataset.auto='0'; });
+  ov.querySelector('#sgName').addEventListener('input',e=>{
+    const c=contactByLabel(e.target.value);
+    /* follow the name only while the position is still the one filled in for them */
+    if(roleEl.dataset.auto==='1'||!roleEl.value.trim()){ roleEl.value=c?(c.role||''):''; roleEl.dataset.auto='1'; } });
   const close=()=>ov.remove();
   ov.querySelector('[data-x]').onclick=close;
   ov.onclick=e=>{ if(e.target===ov) close(); };
@@ -5046,7 +5061,7 @@ function visitSheet(v){
       <div><div class="line">${v.sigCustomer?`<img src="${v.sigCustomer}" alt="">`
         :v.sigPath?`<img data-sigsrc="${esc(v.sigPath)}" alt="">`:''}</div>
         <div class="cap">Customer signature${v.signedDate?` · signed ${esc(v.signedDate)}`:(isSigned(v)?' · signed':' · name and date')}<br>
-          ${esc(v.signedBy||v.contact||'')}${v.signedRole?` · ${esc(v.signedRole)}`:''}</div></div>
+          ${esc(v.signedBy||String(v.contact||'').split(' · ')[0])}${(()=>{ const r=v.signedRole||(contactByLabel(v.signedBy||v.contact)||{}).role; return r?` · ${esc(r)}`:''; })()}</div></div>
       <div><div class="line">${v.sigEngineer?`<img src="${v.sigEngineer}" alt="">`
         :v.sigEngPath?`<img data-sigsrc="${esc(v.sigEngPath)}" alt="">`:''}</div>
         <div class="cap">Ziemer engineer${v.signedDate?` · ${esc(v.signedDate)}`:' · name and date'}<br>${esc(asText(v.engineer))}</div></div>
@@ -5507,10 +5522,45 @@ function roundDialog(){
     if(d){ made[+d.dataset.rdate].date=d.value; tally(); return; }
     const en=e.target.closest('[data-reng]');
     if(en){ made[+en.dataset.reng].engineer=en.value; tally(); return; } });
+  ov.addEventListener('click',e=>{ if(e.target.id!=='rReplace') return;
+    const rs=earlierRounds(), months=new Set(made.map(m=>monthOf(m.date)));
+    const ids=new Set(rs.map(r=>r.id));
+    const doomed=existingPlans().filter(p=>ids.has(p.roundId)&&months.has(monthOf(p.date))&&p.state!=='Visited');
+    if(!confirm(`Remove ${doomed.length} trip${doomed.length===1?'':'s'} from the earlier round in ${[...months].sort().map(monthName).join(', ')}?\n\nTrips already carried out stay where they are.`)) return;
+    const gone=new Set(doomed.map(p=>p.id));
+    DB.plans=DB.plans.filter(p=>!gone.has(p.id));
+    syncAll(); save();
+    toast(`${gone.size} earlier trip${gone.size===1?'':'s'} removed`);
+    ov.querySelector('#rTry').click(); });
   ov.addEventListener('click',e=>{ const a=e.target.closest('[data-sitesall]'); if(!a) return;
     const on=a.dataset.sitesall==='1';
     ov.querySelectorAll('[data-site]').forEach(cb=>{ cb.checked=on; on?chosen.add(cb.dataset.site):chosen.delete(cb.dataset.site); });
     count(); rerun(); });
+
+  /* Anything already on the calendar for the same machine in the same month —
+     from an earlier round or put in by hand — is left unticked, so pressing the
+     button twice, or two people planning the same month, cannot double the trips. */
+  const monthOf=d=>String(d||'').slice(0,7);
+  const existingPlans=()=>(DB.plans||[]).map(CFG.plan.compute).filter(p=>p.status!=='Cancelled');
+  const markTaken=()=>{ const ex=existingPlans();
+    made.forEach(m=>{ const hit=ex.find(p=>p.serial===m.serial&&monthOf(p.date)===monthOf(m.date));
+      m.taken=hit?{date:hit.date,round:!!hit.roundId,visited:hit.state==='Visited'}:null;
+      if(hit) m.skip=true; }); };
+  const earlierRounds=()=>{ const months=new Set(made.map(m=>monthOf(m.date)));
+    const by={};
+    existingPlans().filter(p=>p.roundId&&months.has(monthOf(p.date))).forEach(p=>{
+      const r=by[p.roundId]=by[p.roundId]||{id:p.roundId,label:p.roundLabel||'an earlier round',n:0,done:0,months:new Set(),who:p._cby||p._by||''};
+      r.n++; if(p.state==='Visited') r.done++; r.months.add(monthOf(p.date)); });
+    return Object.values(by); };
+  const guardHtml=()=>{ const rs=earlierRounds(), taken=made.filter(m=>m.taken).length;
+    if(!rs.length&&!taken) return '';
+    return `<div class="note amber" style="margin-bottom:12px">
+      ${rs.length?`<b>${rs.length===1?'A round has':`${rs.length} rounds have`} already been generated for ${[...new Set(rs.flatMap(r=>[...r.months]))].sort().map(monthName).join(', ')}.</b>
+        <div style="margin:6px 0">${rs.map(r=>`${esc(r.label)} — ${r.n} trip${r.n===1?'':'s'} in these months${r.done?`, ${r.done} already carried out`:''}${r.who?` · by ${esc(shortWho(r.who))}`:''}`).join('<br>')}</div>`:''}
+      ${taken?`<div>${taken} of the proposed trip${taken===1?' is':'s are'} for a machine already on the calendar that month, so ${taken===1?'it has':'they have'} been left unticked. Tick one again only if a second visit really is wanted.</div>`:''}
+      ${rs.length?`<div style="margin-top:8px"><button type="button" class="btn sm" id="rReplace">Replace the earlier round in these months</button>
+        <span class="mini">Trips already carried out are kept.</span></div>`:''}
+    </div>`; };
 
   const tally=()=>{
     const live=made.filter(m=>!m.skip);
@@ -5556,9 +5606,10 @@ function roundDialog(){
     if(bad){ made=[]; ov.querySelector('#rPreview').innerHTML=`<div class="note amber">${esc(bad)}</div>`;
       const g=ov.querySelector('#rGo'); g.disabled=true; g.textContent='Put the ticked rows on the calendar'; return; }
     made=buildRound(cfg2,engs).map(m=>({...m,skip:false}));
+    markTaken();
     if(!made.length){ ov.querySelector('#rPreview').innerHTML='<div class="note amber">Nothing could be scheduled. Widen the window or give the engineers more days out.</div>';
       ov.querySelector('#rGo').disabled=true; return; }
-    ov.querySelector('#rPreview').innerHTML=`
+    ov.querySelector('#rPreview').innerHTML=`${guardHtml()}
       <div class="grid two">
         <div class="card"><header><h3>Does it match what you asked for?</h3></header>
           <div class="body" id="rChecks"></div></div>
@@ -5568,9 +5619,9 @@ function roundDialog(){
       </div>
       <div class="tbl-scroll" style="max-height:300px;margin-top:10px"><table class="sticky-first"><thead><tr>
         <th style="width:34px"></th><th>Date</th><th>Where</th><th>Site</th><th>Serial</th><th>Engineer</th></tr></thead><tbody>
-        ${made.map((m,i)=>`<tr><td><input type="checkbox" data-keep="${i}" checked></td>
+        ${made.map((m,i)=>`<tr class="${m.skip?'rowoff':''}"><td><input type="checkbox" data-keep="${i}" ${m.skip?'':'checked'}></td>
           <td><input type="date" data-rdate="${i}" value="${esc(m.date)}" style="width:132px"></td>
-          <td>${esc(m.label)}${m.away?' <span class="tag nv">trip</span>':''}</td>
+          <td>${esc(m.label)}${m.away?' <span class="tag nv">trip</span>':''}${m.taken?`<div class="mini" style="color:var(--amber)">already planned ${esc(m.taken.date)}${m.taken.visited?' · visited':''}</div>`:''}</td>
           <td>${esc(m.site)}</td>
           <td class="mono">${esc(m.serial)}${m.extra&&m.extra.length?` <span class="mini">+${m.extra.length}</span>`:''}</td>
           <td><select data-reng="${i}">${engs.map(n=>`<option ${m.engineer===n?'selected':''}>${esc(n)}</option>`).join('')}</select></td></tr>`).join('')}
@@ -5579,6 +5630,11 @@ function roundDialog(){
   };
   ov.querySelector('#rGo').onclick=()=>{
     const cfg2=read();
+    const ex=existingPlans();
+    const clash=made.filter(m=>!m.skip&&ex.some(p=>p.serial===m.serial&&monthOf(p.date)===monthOf(m.date)));
+    if(clash.length&&!confirm(`${clash.length} of these machines already ${clash.length===1?'has a trip':'have trips'} planned in the same month`
+      +`${clash.some(m=>!m.taken)?' — some were added by someone else while this was open':''}.`
+      +`\n\nAdd ${clash.length===1?'it':'them'} anyway?`)) { markTaken(); ov.querySelector('#rTry').click(); return; }
     DB.master.roundPlan=cfg2;
     const live=made.filter(m=>!m.skip);
     const rid=uid(), stamp=new Date();
