@@ -544,7 +544,7 @@ body.pm-dragging{user-select:none}
 </div>
 
 <script>
-const BUILD='2026-09-21 14:10';
+const BUILD='2026-09-21 15:20';
 /* Boundaries from the Royal Thai Survey Department administrative set
    (ADM1 provinces, ADM2 districts), simplified along shared borders so
    neighbouring shapes meet exactly rather than leaving white slivers.
@@ -2494,11 +2494,21 @@ const CFG={
         :r.pattern==='Away'?`${r.validFrom||'…'} → ${r.validTo||'…'}`
         :`${asList(r.days).join(', ')||'no day'}${r.weeks&&r.weeks!=='Every week'?' · '+r.weeks:''}`;
       const age=r.confirmed?Math.round((new Date()-new Date(r.confirmed))/864e5):null;
+      const today=dISO(new Date()), soon=dISO(addDays(new Date(),21));
+      /* carried on = another schedule for the same surgeon and site picks up the day after */
+      const next=r.validTo?dISO(addDays(new Date(r.validTo),1)):'';
+      const carried=!!next&&(DB.orSchedule||[]).some(o=>o.id!==r.id&&(o.pattern||'Every week')==='Every week'
+        &&o.contactId===r.contactId&&o.locationId===r.locationId
+        &&(!o.validFrom||o.validFrom<=next)&&(!o.validTo||o.validTo>=next));
+      const ended=(r.pattern||'Every week')==='Every week'&&!!r.validTo&&r.validTo<today;
+      const endsSoon=(r.pattern||'Every week')==='Every week'&&!!r.validTo&&r.validTo>=today&&r.validTo<=soon;
       return {...r,pattern:r.pattern||'Every week',surgeon:c.name||'',site:l.name||(r.pattern==='Away'?'every site':''),
-        when,stale:r.pattern!=='Away'&&(age==null||age>90),age}; },
+        when,stale:r.pattern!=='Away'&&!ended&&(age==null||age>90),age,ended,endsSoon,carried}; },
     cols:[{k:'surgeon',label:'Surgeon',w:180},{k:'site',label:'Site',w:170},
       {k:'pattern',label:'Type',r:r=>r.pattern==='Away'?'<span class="tag warn">away</span>':r.pattern==='One day'?'<span class="tag nv">one day</span>':'<span class="tag tl">weekly</span>'},
-      {k:'when',label:'When'},
+      {k:'when',label:'When',r:r=>`${esc(r.when)}${r.pattern==='Every week'&&(r.validFrom||r.validTo)?`<div class="mini">${esc(r.validFrom||'…')} → ${esc(r.validTo||'open-ended')}</div>`:''}
+        ${r.ended?`<span class="tag no">ended</span>${r.carried?' <span class="mini">carried on</span>':''}`:r.endsSoon?`<span class="tag ${r.carried?'ok':'warn'}">${r.carried?'continues':'ends '+esc(r.validTo)}</span>`:''}
+        ${(r.ended||r.endsSoon)&&!r.carried?`<button class="btn sm" data-orcont="${esc(r.id)}" title="A new schedule starting the day after this one ends">Continue ›</button>`:''}`},
       {k:'slot',label:'Time',r:r=>r.pattern==='Away'?'—':esc(r.slot||'All day')},
       {k:'kind',label:'Activity',r:r=>r.pattern==='Away'?'—':esc(r.kind||'')},
       {k:'confirmed',label:'Confirmed',r:r=>r.pattern==='Away'?'—':r.stale?`<span class="tag warn">${r.confirmed?esc(r.confirmed):'never'}</span>`:`<span class="mono">${esc(r.confirmed)}</span>`}],
@@ -5307,6 +5317,8 @@ function pageSurgeons(){
     const key=s.surgeon+'|'+s.slot; const e=r.days[k].get(key)||{surgeon:s.surgeon,slot:s.slot,surgery:s.surgery,n:0}; e.n++; r.days[k].set(key,e); });
   const rows=Object.values(bySite).sort((a,b)=>a.site.localeCompare(b.site));
   const stale=(DB.orSchedule||[]).map(CFG.surg.compute).filter(r=>r.stale);
+  const ending=(DB.orSchedule||[]).map(CFG.surg.compute).filter(r=>(r.endsSoon||r.ended)&&!r.carried
+    &&r.validTo>=dISO(addDays(new Date(),-31)));
   const abbr=s=>({Morning:'am',Afternoon:'pm','All day':'day',Evening:'eve'})[s]||s;
   return `${rows.length?`<h4 class="sec" style="margin-top:0">The next four weeks by site</h4>
     <div class="card"><div class="tbl-scroll"><table class="orgrid"><thead><tr><th>Site</th>${DOW.map(d=>`<th>${d}</th>`).join('')}</tr></thead><tbody>
@@ -5316,6 +5328,9 @@ function pageSurgeons(){
     <div class="legend" style="padding:8px 14px 12px"><span><i style="background:var(--red-l);border-left:3px solid var(--red)"></i>surgery</span>
       <span><i style="background:var(--card-2);border-left:3px solid var(--navy)"></i>clinic</span>
       <span class="mini">×2 means twice in the four weeks shown, for fortnightly or monthly lists</span></div></div>`:''}
+  ${ending.length?`<div class="note amber" style="margin-top:12px"><b>${ending.length} schedule${ending.length===1?' ends':'s end'} without anything to follow:</b>
+    ${ending.map(r=>`${esc(r.surgeon)} at ${esc(r.site)} (${esc(r.validTo)})`).join(' · ')}.
+    After that date the calendar shows nothing for them. Press <b>Continue</b> on the row if the list carries on, or leave it if it really stops.</div>`:''}
   ${stale.length?`<div class="note amber" style="margin-top:12px">${stale.length} schedule${stale.length===1?' has':'s have'} not been confirmed for three months or more. Surgeons' lists move — check them on the next visit and update the date.</div>`:''}
   <h4 class="sec">Schedules</h4>
   ${tableCard(CFG.surg)}`;
@@ -5464,11 +5479,30 @@ function orSessions(fromIso,toIso){
       const off=away.some(a=>a.contactId===r.contactId&&(!a.locationId||a.locationId===r.locationId)
         &&(!a.validFrom||iso>=a.validFrom)&&(!a.validTo||iso<=a.validTo));
       if(off) return;
-      (out[iso]=out[iso]||[]).push({date:iso,rid:r.id,locationId:r.locationId,site:r.site,
+      /* the same surgeon at the same site once per time of day; a whole day covers the halves */
+      const k=r.contactId+'|'+r.locationId, slot=r.slot||'All day';
+      const day=out[iso]=out[iso]||[];
+      if(day.some(s=>s.k===k&&(s.slot===slot||s.slot==='All day'))) return;
+      if(slot==='All day') for(let i=day.length-1;i>=0;i--) if(day[i].k===k) day.splice(i,1);
+      day.push({k,date:iso,rid:r.id,locationId:r.locationId,site:r.site,
         surgeon:r.surgeon,slot:r.slot||'All day',kind:r.kind||'',surgery:isSurgery(r.kind)});
     });
     d.setDate(d.getDate()+1); }
   return out;
+}
+/* another schedule for the same surgeon, site and time that could land on the same day */
+function orOverlap(rec,selfId){
+  const slotsMeet=(a,b)=>(a||'All day')==='All day'||(b||'All day')==='All day'||a===b;
+  const rangesMeet=(a1,a2,b1,b2)=>(!a1||!b2||a1<=b2)&&(!b1||!a2||b1<=a2);
+  const pat=rec.pattern||'Every week';
+  return (DB.orSchedule||[]).map(CFG.surg.compute).filter(o=>{
+    if(o.id===selfId||o.pattern==='Away') return false;
+    if(o.contactId!==rec.contactId||o.locationId!==rec.locationId||!slotsMeet(o.slot,rec.slot)) return false;
+    if(pat==='One day'&&o.pattern==='One day') return o.date===rec.date;
+    if(pat==='One day') return rangesMeet(rec.date,rec.date,o.validFrom,o.validTo)&&asList(o.days).includes(OR_DOW[orDayIdx(rec.date)])&&orWeekFits(o,rec.date);
+    if(o.pattern==='One day') return rangesMeet(o.date,o.date,rec.validFrom,rec.validTo)&&asList(rec.days).includes(OR_DOW[orDayIdx(o.date)])&&orWeekFits(rec,o.date);
+    return rangesMeet(rec.validFrom,rec.validTo,o.validFrom,o.validTo)&&asList(rec.days).some(d=>asList(o.days).includes(d));
+  });
 }
 const PREFERS_OR=/case support|training|customer visit|sales/i;
 const AVOIDS_OR=/maintenance|repair|installation|upgrade/i;
@@ -7637,6 +7671,12 @@ function openForm(cfgKey,id,preset){
     if(missing.length){ toast('Still needed: '+missing.join(', ')); return; }
     if(cfg.unique){ const dup=DB[cfg.key].some(r=>r.id!==id&&String(r[cfg.unique]||'').toLowerCase()===String(out[cfg.unique]||'').toLowerCase());
       if(dup){ toast(`That ${cfg.unique} already exists — records link by ${cfg.unique}, so it has to be unique`); return; } }
+    if(cfgKey==='surg'&&(out.pattern||'Every week')!=='Away'){
+      const clash=orOverlap(out,id);
+      if(clash.length&&!confirm(`This overlaps with ${clash.length===1?'a schedule':`${clash.length} schedules`} already recorded for the same surgeon and site:\n\n`
+        +clash.map(c=>`· ${c.when} · ${c.slot||'All day'} · ${c.validFrom||'…'} → ${c.validTo||'open-ended'}`).join('\n')
+        +`\n\nThe calendar shows the list once either way, but two records for one list are easy to forget when it changes. `
+        +`Usually the older one should be given an end date instead.\n\nSave it anyway?`)) return; }
     if(cfgKey==='catalog'){ out.freight=freightFor(out.category); delete out.group; }
     if(cfgKey==='pmslot'&&rec.dueDate&&out.dueDate!==rec.dueDate){ out.moved=true;
       const trip=(DB.plans||[]).find(x=>x.pmSlot===rec.id);
@@ -7953,6 +7993,11 @@ document.addEventListener('click',e=>{
   if(e.target.id==='planAdd'){ openForm('plan',null,{date:(planMonth||thisMonth())+'-01'}); return; }
   if(e.target.id==='planBuild'){ roundDialog(); return; }
   if(e.target.id==='planRounds'){ roundsDialog(); return; }
+  const oc=e.target.closest('[data-orcont]');
+  if(oc){ const r=(DB.orSchedule||[]).find(x=>x.id===oc.dataset.orcont); if(!r) return;
+    const {id,_by,_at,_cby,_cat,...copy}=r;
+    openForm('surg',null,{...copy,validFrom:dISO(addDays(new Date(r.validTo),1)),validTo:'',confirmed:dISO(new Date())});
+    return; }
   if(e.target.id==='planOR'){ ui2.showOR=ui2.showOR===false; render(); return; }
   if(e.target.id==='scSave'||e.target.id==='scClear'){
     const acct=(document.getElementById('usageAcct')||{}).value; if(!acct) return;
