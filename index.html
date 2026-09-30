@@ -544,7 +544,7 @@ body.pm-dragging{user-select:none}
 </div>
 
 <script>
-const BUILD='2026-09-21 18:40';
+const BUILD='2026-09-21 19:15';
 /* Boundaries from the Royal Thai Survey Department administrative set
    (ADM1 provinces, ADM2 districts), simplified along shared borders so
    neighbouring shapes meet exactly rather than leaving white slivers.
@@ -7752,6 +7752,13 @@ function openForm(cfgKey,id,preset){
       if(trip) trip.date=out.dueDate; }
     if(cfgKey==='base'&&out.warrantyEnd&&out.warrantyEnd!==rec.warrantyEnd) out.warrantyEstimated=false;
     if(cfgKey==='base'&&id&&rec.locationId&&out.locationId&&out.locationId!==rec.locationId){
+      /* freeze the history first, and do it whatever the answer to the question
+         below: a visit that has already happened belongs to the site it happened
+         at, and nothing later should be able to rewrite it */
+      const today=dISO(new Date());
+      let frozen=0;
+      DB.visits.forEach(v=>{ if(v.serial===out.serial&&!v.locationId&&v.date&&v.date<=today){ v.locationId=rec.locationId; frozen++; } });
+      (DB.plans||[]).forEach(v=>{ if(v.serial===out.serial&&!v.locationId&&v.date&&v.date<=today) v.locationId=rec.locationId; });
       /* a machine that changes site has moved: record it, so the visits logged
          at the old site keep reading as having happened there */
       const from=(locById(rec.locationId)||{}).name||'the old site', to=(locById(out.locationId)||{}).name||'the new site';
@@ -7761,7 +7768,11 @@ function openForm(cfgKey,id,preset){
         DB.moves.push({id:uid(),serial:out.serial,date:when,fromLocationId:rec.locationId,
           toLocationId:out.locationId,reason:/demo/i.test(out.status||'')?'Demo placed':'Moved within the account',note:''});
         pendingMoveEdit=DB.moves[DB.moves.length-1].id;
-      } }
+        /* the move has a date, so anything logged after it belongs to the new site */
+        DB.visits.forEach(v=>{ if(v.serial===out.serial&&v.date&&v.date>when&&v.locationId===rec.locationId) v.locationId=out.locationId; });
+      }
+      if(frozen) toast(`${frozen} visit${frozen===1?'':'s'} kept against ${from}`);
+    }
     if(cfgKey==='doc'){
       const held=ov._docHeld?ov._docHeld():{data:'',mime:'',size:0};
       out.data=held.data; out.mime=held.mime; out.size=held.size; out.path=held.path||'';
