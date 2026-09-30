@@ -544,7 +544,7 @@ body.pm-dragging{user-select:none}
 </div>
 
 <script>
-const BUILD='2026-09-21 19:15';
+const BUILD='2026-09-21 20:10';
 /* Boundaries from the Royal Thai Survey Department administrative set
    (ADM1 provinces, ADM2 districts), simplified along shared borders so
    neighbouring shapes meet exactly rather than leaving white slivers.
@@ -2386,6 +2386,25 @@ function locationAt(serial,iso){
   if(past.length) return past[past.length-1].toLocationId||'';
   /* before the first recorded move, it stood where that move took it from */
   return hist[0].fromLocationId||m.locationId||'';
+}
+/* The moves are the record of where a machine has been, so the machine itself
+   follows them: correct or remove a move and the current site follows suit,
+   and the visits that were pinned by that move are worked out again. */
+function reconcileMachine(serial,removed){
+  const m=DB.installedBase.find(x=>x.serial===serial); if(!m) return null;
+  const hist=movesOf(serial);
+  const want=hist.length?hist[hist.length-1].toLocationId
+    :(removed?removed.fromLocationId:m.locationId);
+  if(!want||want===m.locationId) return null;
+  const from=(locById(m.locationId)||{}).name||'—', to=(locById(want)||{}).name||'—';
+  m.locationId=want;
+  return {from,to};
+}
+function restampVisits(serial,removed){
+  /* a visit pinned to the site the deleted move took it to is asked again */
+  DB.visits.forEach(v=>{ if(v.serial!==serial||!v.date) return;
+    if(removed&&v.locationId===removed.toLocationId&&v.date>=removed.date) v.locationId='';
+    if(!v.locationId) v.locationId=locationAt(serial,v.date)||''; });
 }
 const siteNameAt=(serial,iso)=>{ const l=locById(locationAt(serial,iso)); return l?l.name:''; };
 function syncAll(){
@@ -7831,6 +7850,8 @@ function openForm(cfgKey,id,preset){
       packRecalc(out); }
     if(id){ DB[cfg.key][DB[cfg.key].findIndex(r=>r.id===id)]=touch(out); toast('Record updated'); }
     else { out.id=uid(); DB[cfg.key].push(touch(out)); toast('Record added'); }
+    if(cfgKey==='move'){ const moved=reconcileMachine(out.serial); restampVisits(out.serial);
+      if(moved) setTimeout(()=>toast(`${out.serial} now shows as installed at ${moved.to}`),500); }
     syncAll(); save(); close(); render();
     /* the move was written with what the save knew; open it so the reason and
        any note can be put right while it is fresh */
@@ -7952,6 +7973,20 @@ document.addEventListener('click',e=>{
       const kids=[...DB.procedurePack,...DB.serviceContract].filter(r=>r.serial===m.serial).length;
       if(kids&&!confirm(`This machine also has ${kids} pack/contract record${kids===1?'':'s'} linked by serial ${m.serial}. Delete those as well?`)) return;
       if(kids){ DB.procedurePack=DB.procedurePack.filter(r=>r.serial!==m.serial); DB.serviceContract=DB.serviceContract.filter(r=>r.serial!==m.serial); } }
+    if(key==='moves'){ const mv=(DB.moves||[]).find(r=>r.id===d.dataset.dl);
+      if(mv){ const hist=movesOf(mv.serial), isLast=hist.length&&hist[hist.length-1].id===mv.id;
+        const back=(locById(mv.fromLocationId)||{}).name||'Ziemer stock';
+        if(!confirm(`Delete this move?\n\n${isLast
+          ? `${mv.serial} goes back to ${back}, where it stood before ${mv.date}.`
+          : `${mv.serial} stays where the later moves put it, but visits pinned by this move are worked out again.`}`)) return;
+        DB.moves=DB.moves.filter(r=>r.id!==mv.id);
+        /* put the machine back first: the visits are worked out against where it
+           stands once the move is gone */
+        const moved=reconcileMachine(mv.serial,mv);
+        restampVisits(mv.serial,mv);
+        syncAll(); save(); render();
+        toast(moved?`Move deleted · ${mv.serial} is back at ${moved.to}`:'Move deleted');
+        return; } }
     if(confirm('Delete this record permanently?')){ DB[key]=DB[key].filter(r=>r.id!==d.dataset.dl); syncAll(); save(); render(); toast('Record deleted'); } return; }
   const th=e.target.closest('th[data-sk]');
   if(th){ const k=th.dataset.sk;
