@@ -544,7 +544,7 @@ body.pm-dragging{user-select:none}
 </div>
 
 <script>
-const BUILD='2026-09-21 16:05';
+const BUILD='2026-09-21 18:40';
 /* Boundaries from the Royal Thai Survey Department administrative set
    (ADM1 provinces, ADM2 districts), simplified along shared borders so
    neighbouring shapes meet exactly rather than leaving white slivers.
@@ -627,7 +627,7 @@ const OR_SLOTS=['Morning','Afternoon','All day','Evening'];
 const OR_KINDS=['Surgery · LASIK / CLEAR','Surgery · cataract','Surgery · mixed','Clinic (OPD)'];
 const OR_POLICIES=['Keep the whole day free','Use the half-day without surgery'];
 const OR_DOW=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-const LISTS=['docs','duties','plans','usage','contacts','accounts','locations','priceList','engineers','visits','pmPlan','packOrders','installedBase','procedurePack','serviceContract','pipeline','lasikCenters','pricingInputs','tierModel1','tierModel2','orSchedule'];
+const LISTS=['docs','duties','plans','usage','contacts','accounts','locations','priceList','engineers','visits','pmPlan','packOrders','installedBase','procedurePack','serviceContract','pipeline','lasikCenters','pricingInputs','tierModel1','tierModel2','orSchedule','moves'];
 
 /* ─── persistence: pluggable back end ───────────────────────────────────
    Drivers: 'auto'  → Claude artifact storage, else this browser
@@ -1778,6 +1778,7 @@ const VIEWS={
   account:{title:'Accounts',sub:'Legal entities. Every other record is linked back to one of these',icon:'M3 21h18M5 21V7l7-4 7 4v14M9 21v-5h6v5',key:'accounts'},
   catalog:{title:'Price List',sub:'Ziemer published price list — the basis for cost, list price and margin',icon:'M4 4h10l6 6v10H4zM14 4v6h6M8 14h8M8 17h5',key:'priceList'},
   surg:{title:'Surgeon Schedules',sub:'When each surgeon operates or holds clinic at each site — the visit plan works around it',icon:'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2zM9 16l2 2 4-4',key:'orSchedule'},
+  move:{title:'Machine Moves',sub:'Every time a unit changed site — demo placements, sales, loans and returns',icon:'M5 12h14M12 5l7 7-7 7M3 5v14',key:'moves'},
   engineer:{title:'Engineers',sub:'Field service and application engineers',icon:'M16 21v-2a4 4 0 00-8 0v2M12 11a4 4 0 100-8 4 4 0 000 8M20 8v6M23 11h-6',key:'engineers'},
   packan:{title:'Pack Analytics',sub:'Consumable performance — volume, mix, realised price and growth',
     icon:'M3 3v18h18M7 14l3-4 3 3 4-6'},
@@ -1804,7 +1805,7 @@ const VIEWS={
   data:{title:'Data & Quality',sub:'Data quality, connection settings and bulk import',icon:'M12 4c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3zM4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7'}
 };
 function navHTML(){
-  const grp=[['Insight',['dash','analytics','packan','c360']],['Master data',['account','contact','surg','location','catalog','engineer']],['Records',['base','usage','pack','orders','svc','pm','planner','visit']],['Growth',['pipe','market','price']],['System',['doc','users','io','data']]];
+  const grp=[['Insight',['dash','analytics','packan','c360']],['Master data',['account','contact','surg','location','catalog','engineer']],['Records',['base','move','usage','pack','orders','svc','pm','planner','visit']],['Growth',['pipe','market','price']],['System',['doc','users','io','data']]];
   return grp.map(([lb,ks])=>`<div class="nav-label">${lb}</div>`+ks.map(k=>{const v=VIEWS[k];
     let n=v.key?DB[v.key].length:(v.badge?(v.badge()||''):'');
     return `<button class="nav-item ${page===k?'on':''}" data-p="${k}"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="${v.icon}"/></svg><span>${v.title}</span>${n!==''?`<span class="badge${v.badge?' alert':''}">${n}</span>`:''}</button>`;}).join('')).join('');
@@ -2371,6 +2372,22 @@ const packPriceOfAccount=id=>{
   if(!ps.length) return null;
   const boxes=ps.reduce((s,x)=>s+x.boxes,0), rev=ps.reduce((s,x)=>s+x.revenueIncl,0);
   return boxes?rev/boxes:null; };
+const MOVE_REASONS=['Demo placed','Demo collected','Sold and installed','Moved within the account',
+  'Loan while under repair','Returned to Ziemer','Traded in','Other'];
+/* A demo unit spends its life on the road. Each move is a record, so a visit
+   logged two sites ago still reads as having happened where it happened. */
+function movesOf(serial){ return (DB.moves||[]).filter(m=>m.serial===serial)
+  .sort((a,b)=>String(a.date).localeCompare(String(b.date))); }
+function locationAt(serial,iso){
+  const m=DB.installedBase.find(x=>x.serial===serial)||{};
+  const hist=movesOf(serial);
+  if(!hist.length||!iso) return m.locationId||'';
+  const past=hist.filter(x=>x.date<=iso);
+  if(past.length) return past[past.length-1].toLocationId||'';
+  /* before the first recorded move, it stood where that move took it from */
+  return hist[0].fromLocationId||m.locationId||'';
+}
+const siteNameAt=(serial,iso)=>{ const l=locById(locationAt(serial,iso)); return l?l.name:''; };
 function syncAll(){
   syncDenorm();
   linkOrders();
@@ -2529,6 +2546,30 @@ const CFG={
       {k:'validTo',label:'Until',in:'date',when:'Every week|Away',hint:'Leave blank if there is no end in sight'},
       {k:'confirmed',label:'Last confirmed',in:'date',when:'Every week|One day',
         hint:'When the site last confirmed it — lists move, so it asks again after three months'},
+      {k:'note',label:'Note',in:'textarea',wide:1}]},
+  move:{key:'moves',
+    emptyTitle:'No moves recorded',
+    emptyHint:'Change the site on a machine and the move is written here for you.',
+    filters:[{k:'serial',label:'Machine'},{k:'reason',label:'Reason'},{k:'toSite',label:'To'}],
+    sort:(a,b)=>String(b.date||'').localeCompare(String(a.date||'')),
+    compute:r=>{ const f=locById(r.fromLocationId)||{}, t=locById(r.toLocationId)||{};
+      const hist=movesOf(r.serial); const i=hist.findIndex(x=>x.id===r.id);
+      const until=i>=0&&hist[i+1]?hist[i+1].date:'';
+      const days=r.date?Math.round(((until?new Date(until):new Date())-new Date(r.date))/864e5):null;
+      return {...r,fromSite:f.name||(r.fromLocationId?'':'—'),toSite:t.name||'',
+        toAccount:(accById(t.accountId)||{}).name||'',days,until}; },
+    cols:[{k:'date',label:'Date'},{k:'serial',label:'Serial'},
+      {k:'fromSite',label:'From',w:150},{k:'toSite',label:'To',w:150},
+      {k:'toAccount',label:'Account',w:170},{k:'reason',label:'Reason'},
+      {k:'days',label:'Days there',t:'n',r:r=>r.days==null?'—':`${fmtN(r.days,0)}${r.until?'':' · still there'}`},
+      {k:'note',label:'Note',w:200}],
+    form:[{k:'serial',label:'Machine',in:'select',req:1,wide:1,
+        pairs:()=>DB.installedBase.map(m=>({v:m.serial,l:`${m.serial} · ${m.model||''}`}))},
+      {k:'date',label:'Date of the move',in:'date',req:1},
+      {k:'reason',label:'Reason',in:'select',op:MOVE_REASONS,def:'Demo placed',req:1},
+      {k:'fromLocationId',label:'From site',in:'select',pairs:()=>DB.locations.map(l=>({v:l.id,l:locLabel(l)})).sort((a,b)=>a.l.localeCompare(b.l)),
+        hint:'Leave blank if it came from Ziemer stock'},
+      {k:'toLocationId',label:'To site',in:'select',req:1,pairs:()=>DB.locations.map(l=>({v:l.id,l:locLabel(l)})).sort((a,b)=>a.l.localeCompare(b.l))},
       {k:'note',label:'Note',in:'textarea',wide:1}]},
   engineer:{key:'engineers',
     emptyTitle:'No engineers recorded yet',
@@ -2781,7 +2822,10 @@ const CFG={
     /* newest first: a recent visit is looked up far more often than an old one */
     sort:(a,b)=>String(b.date||'').localeCompare(String(a.date||''))||String(b._cat||'').localeCompare(String(a._cat||'')),
     compute:r=>{ const m=DB.installedBase.find(x=>x.serial===r.serial)||{}, t=partsTotals(r.partLines);
-      return {...r,model:m.model||'',company:m.company||'',site:m.location||'',due:daysLeft(r.nextDue),
+      /* the site is the one the machine stood at on the day of the visit, not
+         wherever it has been moved to since */
+      const l=locById(r.locationId)||locById(locationAt(r.serial,r.date))||{};
+      return {...r,model:m.model||'',company:(accById(l.accountId)||{}).name||m.company||'',site:l.name||m.location||'',due:daysLeft(r.nextDue),
         partsTotal:t.charge,partsCost:t.cost,partsQty:t.qty}; },
     cols:[{k:'date',label:'Date'},{k:'serial',label:'Serial'},{k:'model',label:'Model'},
       {k:'site',label:'Site',w:160},{k:'type',label:'Type',r:r=>`<span class="tag ${/repair/i.test(r.type)?'bad':/preventive/i.test(r.type)?'ok':'nv'}">${esc(r.type||'—')}</span>`},
@@ -3104,7 +3148,7 @@ function chartTheme(){ if(typeof Chart==='undefined') return;
   gridX={grid:{display:false},border:{display:false}}; gridY={grid:{color:CSSV('--grid')},border:{display:false}}; }
 const clickPick=(key)=>(e,els,ch)=>{ if(!els.length) return; const lb=ch.data.labels[els[0].index]; GF[key]=GF[key]===lb?null:lb; render(); };
 
-let USAGE_CHART=null;
+let USAGE_CHART=null, pendingMoveEdit=null;
 function drawUsage(){ const d=USAGE_CHART; if(!d||!document.getElementById('cUsageStock')) return;
   const lineCol=PAL[3];
   chart('cUsageStock',{type:'bar',data:{labels:d.labels,datasets:[
@@ -3887,6 +3931,28 @@ function pageMachine(){
         ${packs.length?row('Total',`${fmtM(sum(packs,'revenueIncl'))} over ${fmtN(sum(packs,'qty'),0)} boxes`):''}
       </div></div>
     </div>
+    ${(()=>{ const hist=movesOf(m.serial); if(!hist.length&&!/demo/i.test(m.status||m.note||'')) return '';
+      const rows=[...hist].reverse();
+      const here=locById(m.locationId)||{};
+      const since=hist.length?hist[hist.length-1].date:(m.installDate||'');
+      const daysHere=since?Math.round((new Date()-new Date(since))/864e5):null;
+      return `<h4 class="sec">Where this unit has stood</h4>
+      <div class="card"><div class="body" style="padding:12px 14px">
+        <div class="mini" style="margin-bottom:8px">At <b>${esc(here.name||m.location||'—')}</b>${since?` since ${esc(since)}${daysHere!=null?` · ${fmtN(daysHere,0)} days`:''}`:''}
+          · ${rows.length} move${rows.length===1?'':'s'} recorded${rows.length?` · ${fmtN(new Set(rows.map(x=>x.toLocationId)).size,0)} site${new Set(rows.map(x=>x.toLocationId)).size===1?'':'s'}`:''}</div>
+        ${rows.length?`<div class="tbl-scroll"><table class="sticky-first"><thead><tr>
+          <th>Date</th><th>From</th><th>To</th><th>Reason</th><th class="n">Days there</th><th class="n">Visits</th><th></th></tr></thead><tbody>
+          ${rows.map(x=>{ const c=CFG.move.compute(x);
+            const vs=DB.visits.filter(v=>v.serial===m.serial&&v.date>=x.date&&(!c.until||v.date<c.until)).length;
+            return `<tr><td class="mono">${esc(x.date)}</td><td>${esc(c.fromSite||'Ziemer stock')}</td>
+              <td><b>${esc(c.toSite)}</b>${c.toAccount?`<div class="mini">${esc(c.toAccount)}</div>`:''}</td>
+              <td>${esc(x.reason||'')}${x.note?`<div class="mini">${esc(x.note)}</div>`:''}</td>
+              <td class="num">${c.days==null?'—':fmtN(c.days,0)}${c.until?'':' <span class="tag ok">now</span>'}</td>
+              <td class="num">${vs||'—'}</td>
+              <td class="act"><button class="btn sm" data-editrow="${esc(x.id)}" data-cfg="move">Edit</button></td></tr>`; }).join('')}
+        </tbody></table></div>`:'<div class="mini">No moves recorded yet — change the site on this machine and the move is written here.</div>'}
+        <div style="margin-top:10px"><button class="btn sm" data-addmove="${esc(m.serial)}">+ Record a move</button></div>
+      </div></div>`; })()}
     <h4 class="sec">Documents</h4>
     ${docPanel('machine',m.id,'Delivery notes, the installation report, the warranty certificate — anything worth keeping with this unit',
       [...contractsOf(m.serial).map(c=>['contract',c.id,'contract']),
@@ -7679,11 +7745,23 @@ function openForm(cfgKey,id,preset){
         +clash.map(c=>`· ${c.when} · ${c.slot||'All day'} · ${c.validFrom||'…'} → ${c.validTo||'open-ended'}`).join('\n')
         +`\n\nThe calendar shows the list once either way, but two records for one list are easy to forget when it changes. `
         +`Usually the older one should be given an end date instead.\n\nSave it anyway?`)) return; }
+    if(cfgKey==='visit'&&!out.locationId) out.locationId=locationAt(out.serial,out.date)||'';
     if(cfgKey==='catalog'){ out.freight=freightFor(out.category); delete out.group; }
     if(cfgKey==='pmslot'&&rec.dueDate&&out.dueDate!==rec.dueDate){ out.moved=true;
       const trip=(DB.plans||[]).find(x=>x.pmSlot===rec.id);
       if(trip) trip.date=out.dueDate; }
     if(cfgKey==='base'&&out.warrantyEnd&&out.warrantyEnd!==rec.warrantyEnd) out.warrantyEstimated=false;
+    if(cfgKey==='base'&&id&&rec.locationId&&out.locationId&&out.locationId!==rec.locationId){
+      /* a machine that changes site has moved: record it, so the visits logged
+         at the old site keep reading as having happened there */
+      const from=(locById(rec.locationId)||{}).name||'the old site', to=(locById(out.locationId)||{}).name||'the new site';
+      const when=prompt(`Moving ${out.serial} from ${from} to ${to}.\n\nWhat date did it move? (YYYY-MM-DD, blank to skip the record)`,dISO(new Date()));
+      if(when&&/^\d{4}-\d{2}-\d{2}$/.test(when)){
+        DB.moves=DB.moves||[];
+        DB.moves.push({id:uid(),serial:out.serial,date:when,fromLocationId:rec.locationId,
+          toLocationId:out.locationId,reason:/demo/i.test(out.status||'')?'Demo placed':'Moved within the account',note:''});
+        pendingMoveEdit=DB.moves[DB.moves.length-1].id;
+      } }
     if(cfgKey==='doc'){
       const held=ov._docHeld?ov._docHeld():{data:'',mime:'',size:0};
       out.data=held.data; out.mime=held.mime; out.size=held.size; out.path=held.path||'';
@@ -7742,7 +7820,12 @@ function openForm(cfgKey,id,preset){
       packRecalc(out); }
     if(id){ DB[cfg.key][DB[cfg.key].findIndex(r=>r.id===id)]=touch(out); toast('Record updated'); }
     else { out.id=uid(); DB[cfg.key].push(touch(out)); toast('Record added'); }
-    syncAll(); save(); close(); render(); };
+    syncAll(); save(); close(); render();
+    /* the move was written with what the save knew; open it so the reason and
+       any note can be put right while it is fresh */
+    if(pendingMoveEdit){ const mv=pendingMoveEdit; pendingMoveEdit=null;
+      setTimeout(()=>openForm('move',mv),150); }
+  };
 }
 function toCSV(key){
   const rows=DB[key]; if(!rows.length) return;
@@ -7755,10 +7838,10 @@ function toCSV(key){
 const TABLE_LABELS={accounts:'Accounts',docs:'Documents',contacts:'Contacts',usage:'Machine usage',plans:'Visit plans',duties:'Duty roster',locations:'Locations',priceList:'Price list',engineers:'Engineers',
   installedBase:'Installed base',procedurePack:'Pack agreements',packOrders:'Pack orders',
   serviceContract:'Service contracts',pmPlan:'PM schedule',visits:'Service visits',pipeline:'Pipeline',
-  lasikCenters:'LASIK centres',pricingInputs:'Volume inputs',tierModel1:'Tier model #1',tierModel2:'Tier model #2'};
+  lasikCenters:'LASIK centres',pricingInputs:'Volume inputs',tierModel1:'Tier model #1',tierModel2:'Tier model #2',orSchedule:'Surgeon schedules',moves:'Machine moves'};
 const TABLE_KEYS={accounts:'name',docs:'id',contacts:'name',usage:'id',plans:'id',duties:'weekStart',locations:'name',priceList:'code',engineers:'name',installedBase:'serial',
   packOrders:'id',procedurePack:'id',serviceContract:'id',pmPlan:'id',visits:'id',pipeline:'customer',
-  lasikCenters:'hospital',pricingInputs:'customer',tierModel1:'tier',tierModel2:'tier',orSchedule:'id'};
+  lasikCenters:'hospital',pricingInputs:'customer',tierModel1:'tier',tierModel2:'tier',orSchedule:'id',moves:'id'};
 function parseCSV(text){
   const rows=[]; let row=[], cell='', q=false;
   text=String(text).replace(/^\uFEFF/,'').replace(/\r\n/g,'\n').replace(/\r/g,'\n');
@@ -7998,6 +8081,10 @@ document.addEventListener('click',e=>{
   if(e.target.id==='planAdd'){ openForm('plan',null,{date:(planMonth||thisMonth())+'-01'}); return; }
   if(e.target.id==='planBuild'){ roundDialog(); return; }
   if(e.target.id==='planRounds'){ roundsDialog(); return; }
+  const am=e.target.closest('[data-addmove]');
+  if(am){ const s=am.dataset.addmove, m=DB.installedBase.find(x=>x.serial===s)||{};
+    openForm('move',null,{serial:s,date:dISO(new Date()),fromLocationId:m.locationId||'',reason:'Demo placed'});
+    return; }
   const oc=e.target.closest('[data-orcont]');
   if(oc){ const r=(DB.orSchedule||[]).find(x=>x.id===oc.dataset.orcont); if(!r) return;
     const {id,_by,_at,_cby,_cat,...copy}=r;
