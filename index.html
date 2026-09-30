@@ -544,7 +544,7 @@ body.pm-dragging{user-select:none}
 </div>
 
 <script>
-const BUILD='2026-09-21 21:00';
+const BUILD='2026-09-30 12:20';
 /* Boundaries from the Royal Thai Survey Department administrative set
    (ADM1 provinces, ADM2 districts), simplified along shared borders so
    neighbouring shapes meet exactly rather than leaving white slivers.
@@ -2400,11 +2400,18 @@ function reconcileMachine(serial,removed){
   m.locationId=want;
   return {from,to};
 }
-function restampVisits(serial,removed){
-  /* a visit pinned to the site the deleted move took it to is asked again */
+function restampVisits(serial){
+  /* The moves are the record of where the machine stood, so they decide where a
+     visit happened — a stamp written before the move was known is corrected
+     rather than left standing. The exception is a visit on the very day of a
+     move: the machine stood at both sites that day and only the person who was
+     there knows which, so whatever is already recorded stands. */
+  const hist=movesOf(serial);
+  const moveDays=new Set(hist.map(m=>m.date));
   DB.visits.forEach(v=>{ if(v.serial!==serial||!v.date) return;
-    if(removed&&v.locationId===removed.toLocationId&&v.date>=removed.date) v.locationId='';
-    if(!v.locationId) v.locationId=locationAt(serial,v.date)||''; });
+    if(moveDays.has(v.date)&&v.locationId) return;
+    const at=locationAt(serial,v.date);
+    if(at&&v.locationId!==at) v.locationId=at; });
 }
 const siteNameAt=(serial,iso)=>{ const l=locById(locationAt(serial,iso)); return l?l.name:''; };
 function syncAll(){
@@ -6490,13 +6497,17 @@ function pageData(){
           <div style="margin-top:9px"><button class="btn sm" id="dsTestWrite">Test a write now</button></div>
           <div class="mini" id="dsTestOut" style="margin-top:8px"></div></div></div>
       ${(()=>{ const loose=DB.visits.filter(v=>!v.locationId&&v.date).length;
-        if(!loose) return '';
+        const wrong=DB.visits.filter(v=>{ if(!v.locationId||!v.date||!v.serial) return false;
+          const hist=movesOf(v.serial); if(!hist.length) return false;
+          if(hist.some(m=>m.date===v.date)) return false;
+          const at=locationAt(v.serial,v.date); return at&&at!==v.locationId; }).length;
+        if(!loose&&!wrong) return '';
         return `<div class="fld wide"><label>Where visits happened</label>
-          <div class="note"><b>${loose} visit${loose===1?' is':'s are'} not pinned to a site.</b>
+          <div class="note"><b>${loose?`${loose} visit${loose===1?' is':'s are'} not pinned to a site.`:''}${wrong?`${loose?' ':''}${wrong} visit${wrong===1?' sits':'s sit'} at a site the move history disagrees with.`:''}</b>
             A visit like that reads off wherever its machine stands today, so moving a demo unit rewrites the history of the sites it has already been to.
             Pinning writes the site onto each visit: where the move history says it stood that day, or its current site for a machine that has never moved.
             <div class="mini" style="margin-top:6px">Record the moves first for any unit that has already been shifted — the dates are what tell the old visits apart.</div>
-            <div style="margin-top:10px"><button class="btn sm pri" id="dsPinVisits">Pin ${loose} visit${loose===1?'':'s'} to where they happened</button></div>
+            <div style="margin-top:10px"><button class="btn sm pri" id="dsPinVisits">Place ${loose+wrong} visit${loose+wrong===1?'':'s'} by the move history</button></div>
           </div></div>`; })()}
       ${(()=>{ const pre=(DB.master&&DB.master.codePrefix)||'ZOS-';
         const s=codeScan(pre);
@@ -7786,6 +7797,7 @@ function openForm(cfgKey,id,preset){
       const today=dISO(new Date());
       let frozen=0;
       DB.visits.forEach(v=>{ if(v.serial===out.serial&&!v.locationId&&v.date&&v.date<=today){ v.locationId=rec.locationId; frozen++; } });
+      const beforeMove=DB.visits.filter(v=>v.serial===out.serial).map(v=>[v.id,v.locationId]);
       (DB.plans||[]).forEach(v=>{ if(v.serial===out.serial&&!v.locationId&&v.date&&v.date<=today) v.locationId=rec.locationId; });
       /* a machine that changes site has moved: record it, so the visits logged
          at the old site keep reading as having happened there */
@@ -7796,8 +7808,9 @@ function openForm(cfgKey,id,preset){
         DB.moves.push({id:uid(),serial:out.serial,date:when,fromLocationId:rec.locationId,
           toLocationId:out.locationId,reason:/demo/i.test(out.status||'')?'Demo placed':'Moved within the account',note:''});
         pendingMoveEdit=DB.moves[DB.moves.length-1].id;
-        /* the move has a date, so anything logged after it belongs to the new site */
-        DB.visits.forEach(v=>{ if(v.serial===out.serial&&v.date&&v.date>when&&v.locationId===rec.locationId) v.locationId=out.locationId; });
+        /* with the move written, every visit is placed by the history again */
+        restampVisits(out.serial);
+        frozen=beforeMove.filter(([id,was])=>{ const v=DB.visits.find(x=>x.id===id); return v&&v.locationId!==was; }).length||frozen;
       }
       if(frozen) toast(`${frozen} visit${frozen===1?'':'s'} kept against ${from}`);
     }
@@ -7992,7 +8005,7 @@ document.addEventListener('click',e=>{
         /* put the machine back first: the visits are worked out against where it
            stands once the move is gone */
         const moved=reconcileMachine(mv.serial,mv);
-        restampVisits(mv.serial,mv);
+        restampVisits(mv.serial);
         syncAll(); save(); render();
         toast(moved?`Move deleted · ${mv.serial} is back at ${moved.to}`:'Move deleted');
         return; } }
@@ -8413,7 +8426,10 @@ document.addEventListener('click',e=>{
   const gg=e.target.closest('[data-gapgo]');
   if(gg){ page=gg.dataset.gapgo; render(); window.scrollTo(0,0); return; }
   if(e.target.id==='dsPinVisits'){
-    let n=0, byMove=0;
+    let n=0, byMove=0, fixed=0;
+    const before={}; DB.visits.forEach(v=>before[v.id]=v.locationId||'');
+    [...new Set(DB.visits.map(v=>v.serial).filter(Boolean))].forEach(s=>{ if(movesOf(s).length) restampVisits(s); });
+    DB.visits.forEach(v=>{ if(before[v.id]&&v.locationId!==before[v.id]) fixed++; });
     DB.visits.forEach(v=>{ if(v.locationId||!v.date||!v.serial) return;
       const hist=movesOf(v.serial);
       const at=locationAt(v.serial,v.date);
@@ -8421,7 +8437,7 @@ document.addEventListener('click',e=>{
       v.locationId=at; n++; if(hist.length) byMove++; });
     (DB.plans||[]).forEach(p2=>{ if(!p2.locationId&&p2.date&&p2.serial&&p2.date<=dISO(new Date())) p2.locationId=locationAt(p2.serial,p2.date)||''; });
     syncAll(); save(); render();
-    toast(n?`${n} visit${n===1?'':'s'} pinned${byMove?` · ${byMove} placed by the move history`:''}`:'Nothing to pin');
+    toast(n||fixed?`${n} visit${n===1?'':'s'} pinned${fixed?` · ${fixed} corrected against the move history`:''}`:'Nothing to pin');
     return; }
   if(e.target.id==='dsPushMine'){
     const n=LISTS.reduce((s,k)=>s+((DB[k]||[]).length),0);
