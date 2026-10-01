@@ -544,7 +544,7 @@ body.pm-dragging{user-select:none}
 </div>
 
 <script>
-const BUILD='2026-09-30 12:20';
+const BUILD='2026-10-01 09:40';
 /* Boundaries from the Royal Thai Survey Department administrative set
    (ADM1 provinces, ADM2 districts), simplified along shared borders so
    neighbouring shapes meet exactly rather than leaving white slivers.
@@ -1079,8 +1079,12 @@ const Store={
       catch(e){ this.err=String(e.message||e); this.remote=false; }
     }
     return await this.lget(k); },
+  expired(e){ return /JWT expired|PGRST30[13]|invalid JWT|token is expired/i.test(String(e||'')); },
   async set(k,v){
     if(k==='ziemer:db'&&this.rowMode()){
+      /* A sign-in lasts an hour. Renewing it before the write keeps a long
+         afternoon of visits from piling up against an expired token. */
+      if(typeof Auth!=='undefined'&&Auth.on()) await Auth.ensure();
       try{ const rows=RecStore.changes(this.base?JSON.parse(this.base):{},JSON.parse(v));
         const clash=await RecStore.conflicts(rows.filter(r=>!r.deleted));
         if(clash.length){ this.pendingRows=rows; this.pendingDoc=v;
@@ -1094,6 +1098,14 @@ const Store={
            saved and then vanish on the next load, so the error is kept in view
            and the base is left alone so the change is retried. */
         this.err=String(e.message||e);
+        /* The sign-in ran out mid-session: renew it and send the same rows
+           again rather than telling someone their rights were taken away. */
+        if(this.expired(this.err)&&typeof Auth!=='undefined'&&!this.retrying){
+          this.retrying=true;
+          const ok=await Auth.refresh();
+          this.retrying=false;
+          if(ok){ try{ return await this.set(k,v); }catch(x){ this.err=String(x.message||x); } }
+        }
         this.writeErr=this.err;
         try{ this.pending=RecStore.changes(this.base?JSON.parse(this.base):{},JSON.parse(v)).length; }catch(x){ this.pending=0; }
         await this.lset(k,v);
@@ -1180,13 +1192,16 @@ function writeBanner(){
   if(!Store.writeErr){ el&&el.remove(); return; }
   if(!el){ el=document.createElement('div'); el.id='writeWarn'; el.className='writewarn';
     document.body.appendChild(el); }
-  const why=/40[13]/.test(Store.writeErr)?'The database refused the change. Your account most likely has read-only rights — ask an administrator to set your role to editor.'
+  const gone=Store.expired(Store.writeErr);
+  const why=gone?'Your sign-in ran out while the page was open. Nothing is lost — sign in again and the waiting records go across.'
+    :/40[13]/.test(Store.writeErr)?'The database refused the change. Your account most likely has read-only rights — ask an administrator to set your role to editor.'
     :/PGRST|42501/.test(Store.writeErr)?'The database refused the change, most likely through its row level rules.'
     :'The change could not be written.';
   el.innerHTML=`<div><b>Your last change has not reached the database.</b> ${esc(why)}
       <div class="mini" style="margin-top:4px">${Store.pending} record${Store.pending===1?'':'s'} waiting · ${esc(String(Store.writeErr).slice(0,110))}</div>
       <div class="mini">Do not reload or load from the server until this is cleared, or the work will be lost.</div></div>
     <span class="spacer"></span>
+    ${gone?'<button class="btn sm pri" id="writeSignIn">Sign in again</button>':''}
     <button class="btn sm" id="writeRetry">Try again</button>`;
 }
 function saveBadge(){
@@ -8157,6 +8172,17 @@ document.addEventListener('click',e=>{
   if(oc){ const r=(DB.orSchedule||[]).find(x=>x.id===oc.dataset.orcont); if(!r) return;
     const {id,_by,_at,_cby,_cat,...copy}=r;
     openForm('surg',null,{...copy,validFrom:dISO(addDays(new Date(r.validTo),1)),validTo:'',confirmed:dISO(new Date())});
+    return; }
+  if(e.target.id==='writeSignIn'){
+    const pw=prompt(`Signing in again as ${(Auth.session&&Auth.session.user&&Auth.session.user.email)||'this account'}.\n\nThe page stays as it is and the waiting records are sent once you are back in.\n\nPassword:`);
+    if(!pw) return;
+    (async()=>{
+      const mail=(Auth.session&&Auth.session.user&&Auth.session.user.email)||'';
+      const ok=await Auth.signIn(mail,pw);
+      if(!ok){ toast('That did not work — '+String(Auth.err||'').slice(0,80)); return; }
+      toast('Signed in again — sending the waiting records');
+      const btn=document.getElementById('writeRetry'); if(btn) btn.click();
+    })();
     return; }
   if(e.target.id==='planOR'){ ui2.showOR=ui2.showOR===false; render(); return; }
   if(e.target.id==='scSave'||e.target.id==='scClear'){
