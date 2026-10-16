@@ -544,7 +544,7 @@ body.pm-dragging{user-select:none}
 </div>
 
 <script>
-const BUILD='2026-10-16 15:45';
+const BUILD='2026-10-01 09:40';
 /* Boundaries from the Royal Thai Survey Department administrative set
    (ADM1 provinces, ADM2 districts), simplified along shared borders so
    neighbouring shapes meet exactly rather than leaving white slivers.
@@ -620,11 +620,6 @@ insert into ziemer_workspace (id, data) values ('ziemer-th', '{}'::jsonb)
 let DB=null, page='dash', query='', filters={}, sortKey=null, sortDir=1, charts=[], expanded={},
     GF={model:null,province:null,status:null,brand:null,account:null,ageBucket:null}, theme='light', chartMode={};
 const uid=()=>'r'+Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-3);
-/* CLM-2026-001 — runs in its own sequence each year so the number says when */
-function nextClaimNo(){ const y=new Date().getFullYear(), pre='CLM-'+y+'-';
-  const n=(DB.claims||[]).map(c=>String(c.claimNo||''))
-    .filter(s=>s.startsWith(pre)).map(s=>parseInt(s.slice(pre.length),10)||0);
-  return pre+String((n.length?Math.max(...n):0)+1).padStart(3,'0'); }
 /* surgeon schedules — needed before the table definitions read them */
 const OR_PATTERNS=['Every week','One day','Away'];
 const OR_WEEKS=['Every week','1st','2nd','3rd','4th','Last','1st & 3rd','2nd & 4th','Every other week'];
@@ -632,11 +627,7 @@ const OR_SLOTS=['Morning','Afternoon','All day','Evening'];
 const OR_KINDS=['Surgery · LASIK / CLEAR','Surgery · cataract','Surgery · mixed','Clinic (OPD)'];
 const OR_POLICIES=['Keep the whole day free','Use the half-day without surgery'];
 const OR_DOW=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-const CLAIM_STATUS=['Draft','Sent to Ziemer AG','Under review','Approved','Partly approved','Rejected','Replacement sent','Closed'];
-const CLAIM_FAULTS=['Vacuum loss / suction failure','Packaging damaged','Sterile barrier broken','Cone or applanation defect','Expired on arrival','Wrong model shipped','Short shipment','Damaged in transit','Device rejected the pack','Other'];
-const CLAIM_IMPACT=['None — spotted before the case','Case delayed','Surgery postponed','Surgery cancelled','Patient or eye affected'];
-const CLAIM_COMP=['Replacement pack','Credit note','Both'];
-const LISTS=['claims','docs','duties','plans','usage','contacts','accounts','locations','priceList','engineers','visits','pmPlan','packOrders','installedBase','procedurePack','serviceContract','pipeline','lasikCenters','pricingInputs','tierModel1','tierModel2','orSchedule','moves'];
+const LISTS=['docs','duties','plans','usage','contacts','accounts','locations','priceList','engineers','visits','pmPlan','packOrders','installedBase','procedurePack','serviceContract','pipeline','lasikCenters','pricingInputs','tierModel1','tierModel2','orSchedule','moves'];
 
 /* ─── persistence: pluggable back end ───────────────────────────────────
    Drivers: 'auto'  → Claude artifact storage, else this browser
@@ -1803,8 +1794,6 @@ const VIEWS={
   catalog:{title:'Price List',sub:'Ziemer published price list — the basis for cost, list price and margin',icon:'M4 4h10l6 6v10H4zM14 4v6h6M8 14h8M8 17h5',key:'priceList'},
   surg:{title:'Surgeon Schedules',sub:'When each surgeon operates or holds clinic at each site — the visit plan works around it',icon:'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2zM9 16l2 2 4-4',key:'orSchedule'},
   move:{title:'Machine Moves',sub:'Every time a unit changed site — demo placements, sales, loans and returns',icon:'M5 12h14M12 5l7 7-7 7M3 5v14',key:'moves'},
-  claim:{title:'Product Claims',sub:'Faulty procedure packs — the lot, the decision from Ziemer AG and what the customer got back',
-    icon:'M10.3 3.9L1.8 18a2 2 0 001.7 3h16.9a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01',key:'claims'},
   engineer:{title:'Engineers',sub:'Field service and application engineers',icon:'M16 21v-2a4 4 0 00-8 0v2M12 11a4 4 0 100-8 4 4 0 000 8M20 8v6M23 11h-6',key:'engineers'},
   packan:{title:'Pack Analytics',sub:'Consumable performance — volume, mix, realised price and growth',
     icon:'M3 3v18h18M7 14l3-4 3 3 4-6'},
@@ -1831,9 +1820,9 @@ const VIEWS={
   data:{title:'Data & Quality',sub:'Data quality, connection settings and bulk import',icon:'M12 4c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3zM4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7'}
 };
 function navHTML(){
-  const grp=[['Insight',['dash','analytics','packan','c360']],['Master data',['account','contact','surg','location','catalog','engineer']],['Records',['base','move','usage','pack','orders','claim','svc','pm','planner','visit']],['Growth',['pipe','market','price']],['System',['doc','users','io','data']]];
+  const grp=[['Insight',['dash','analytics','packan','c360']],['Master data',['account','contact','surg','location','catalog','engineer']],['Records',['base','move','usage','pack','orders','svc','pm','planner','visit']],['Growth',['pipe','market','price']],['System',['doc','users','io','data']]];
   return grp.map(([lb,ks])=>`<div class="nav-label">${lb}</div>`+ks.map(k=>{const v=VIEWS[k];
-    let n=v.key?(DB[v.key]||[]).length:(v.badge?(v.badge()||''):'');
+    let n=v.key?DB[v.key].length:(v.badge?(v.badge()||''):'');
     return `<button class="nav-item ${page===k?'on':''}" data-p="${k}"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="${v.icon}"/></svg><span>${v.title}</span>${n!==''?`<span class="badge${v.badge?' alert':''}">${n}</span>`:''}</button>`;}).join('')).join('');
 }
 
@@ -2019,7 +2008,7 @@ const VISIT_TEMPLATE={
   'Sales visit':'Customer call.\nMet with:\nDiscussed:\nNext step:',
   'Remote support':'Remote support.\nReported by:\nDiagnosis:\nResolution:'};
 const DOC_KINDS={machine:'Machine',contract:'Service contract',visit:'Service visit',
-  account:'Account',location:'Site',plan:'Planned visit',pipe:'Opportunity',claim:'Product claim'};
+  account:'Account',location:'Site',plan:'Planned visit',pipe:'Opportunity'};
 const DOC_LIMIT=800*1024;   /* anything larger belongs on a drive, not in the workspace */
 function docPanel(kind,refId,blurb,also){
   const list=docsFor(kind,refId).map(d=>({...d,from:''}));
@@ -2623,103 +2612,6 @@ const CFG={
         hint:'Leave blank if it came from Ziemer stock'},
       {k:'toLocationId',label:'To site',in:'select',req:1,pairs:()=>DB.locations.map(l=>({v:l.id,l:locLabel(l)})).sort((a,b)=>a.l.localeCompare(b.l))},
       {k:'note',label:'Note',in:'textarea',wide:1}]},
-  claim:{key:'claims',todayKey:'date',
-    emptyTitle:'No claims recorded',
-    emptyHint:'Press “+ Add record” when a procedure pack arrives faulty or fails on the device. The lot number, the decision from Ziemer AG and the replacement all stay on the one record.',
-    filters:[{k:'status',label:'Status'},{k:'accountName',label:'Account'},{k:'fault',label:'Fault'},
-      {k:'year',label:'Year',get:r=>String(r.date||'').slice(0,4)}],
-    sort:(a,b)=>String(b.date||'').localeCompare(String(a.date||''))||String(b.claimNo||'').localeCompare(String(a.claimNo||'')),
-    compute:r=>{ const l=locById(r.locationId)||{}, a=accById(r.accountId)||accById(l.accountId)||{};
-      const it=catItem(r.code)||{};
-      const open=!/^(Closed|Rejected)$/.test(r.status||'');
-      /* an open claim is counted to today; a settled one stops the day it settled */
-      const end=open?'':(r.receivedDate||r.dispatchDate||r.approvedDate||r.sentDate||'');
-      const days=r.date?Math.max(0,Math.round(((end?new Date(end):new Date())-new Date(r.date))/864e5)):null;
-      const sameLot=r.lot?(DB.claims||[]).filter(c=>c.lot&&norm(c.lot)===norm(r.lot)).length:0;
-      return {...r,year:String(r.date||'').slice(0,4),accountName:a.name||'',site:l.name||'',
-        item:it.name||'',value:(+r.value||0)||((+it.listIncl||0)/10*(+r.qty||0)),
-        open,days,sameLot}; },
-    cols:[{k:'claimNo',label:'Claim',r:r=>`<span class="mono">${esc(r.claimNo||'—')}</span>`},
-      {k:'date',label:'Reported',r:r=>`<span class="mono">${esc(r.date||'')}</span>`},
-      {k:'accountName',label:'Account',w:160,r:r=>r.accountName?esc(r.accountName):'<span class="tag warn">not linked</span>'},
-      {k:'site',label:'Site',w:150},
-      {k:'item',label:'Item',w:190,tip:'The product code is on the record',
-        r:r=>esc((r.item||r.code||'').replace(/^(Procedure Pack|PP) /i,''))||'—'},
-      {k:'lot',label:'Lot',r:r=>r.lot?`<span class="mono">${esc(r.lot)}</span>${r.sameLot>1?` <span class="tag warn" title="This lot has been claimed ${r.sameLot} times">×${r.sameLot}</span>`:''}`:'<span class="tag warn">no lot</span>'},
-      {k:'qty',label:'Packs',t:'n',r:r=>fmtN(r.qty,0)},
-      {k:'value',label:'Value',t:'n',r:r=>fmtM(r.value)},
-      {k:'fault',label:'Fault',w:170},
-      {k:'impact',label:'Effect',r:r=>/affected|cancelled/i.test(r.impact||'')?`<span class="tag bad">${esc(r.impact)}</span>`
-        :/postponed|delayed/i.test(r.impact||'')?`<span class="tag warn">${esc(r.impact)}</span>`
-        :`<span class="tag ok">none</span>`},
-      {k:'status',label:'Status',r:r=>`<span class="tag ${/Rejected/.test(r.status||'')?'bad'
-        :/Closed|Replacement sent/.test(r.status||'')?'ok'
-        :/Approved/.test(r.status||'')?'tl':'nv'}">${esc(r.status||'Draft')}</span>`},
-      {k:'days',label:'Age',t:'n',r:r=>r.days==null?'—':r.open
-        ?`<span class="tag ${r.days>30?'bad':r.days>14?'warn':'nv'}">${r.days} d open</span>`
-        :`<span class="mini">${r.days} d</span>`},
-      {k:'compensation',label:'Compensation',r:r=>r.compensation?`<span class="tag tl">${esc(r.compensation)}</span>`:'—'},
-      {k:'dispatchDate',label:'Dispatched',r:r=>r.dispatchDate?`<span class="mono">${esc(r.dispatchDate)}</span>`:'—'}],
-    total:rows=>`<td colspan="6">${rows.length} claim${rows.length===1?'':'s'}</td>
-      <td class="num">${fmtN(sum(rows,'qty'),0)}</td>
-      <td class="num">${fmtM(sum(rows,'value'))}</td>
-      <td colspan="5"></td>`,
-    form:[{k:'__ch1',label:'The claim',in:'head',wide:1,hint:'Who reported it, from where, and when'},
-      {k:'claimNo',label:'Claim number',hint:'Generated here — Ziemer AG issues no form of its own, so this is the reference everyone quotes'},
-      {k:'date',label:'Date reported',in:'date',req:1},
-      {k:'accountId',label:'Account',in:'select',req:1,
-        pairs:()=>DB.accounts.map(a=>({v:a.id,l:a.name})).sort((x,y)=>x.l.localeCompare(y.l))},
-      {k:'locationId',label:'Site',in:'select',follows:'accountId',
-        pairs:()=>DB.locations.map(l=>({v:l.id,l:locLabel(l)})).sort((a,b)=>a.l.localeCompare(b.l)),
-        hint:'Narrows to the sites of the account above'},
-      {k:'reportedBy',label:'Reported by',in:'select',
-        opts:rec=>contactNames(rec&&rec.accountId,rec&&rec.locationId),
-        hint:'The people recorded at that account and site'},
-      {k:'handler',label:'Handled by',in:'datalist',
-        opts:()=>DB.engineers.filter(e=>e.name&&e.active!=='No')
-          .map(e=>e.name+(e.role?' · '+e.role:'')).sort(),
-        hint:'From the Engineers page — whoever at Ziemer Thailand is chasing it'},
-      {k:'serial',label:'Machine',in:'select',
-        pairs:()=>DB.installedBase.map(m=>({v:m.serial,l:`${m.serial} · ${m.model||''}`})),
-        hint:'The units standing at the site above — picking one here fills the site in if it is still blank'},
-
-      {k:'__ch2',label:'The pack',in:'head',wide:1,hint:'Lot and expiry are what Ziemer AG traces a batch by — a claim without a lot number is hard for them to act on'},
-      {k:'code',label:'Product',in:'select',req:1,wide:1,
-        pairs:()=>DB.priceList.filter(p=>/procedure pack/i.test(p.category||''))
-          .map(p=>({v:p.code,l:`${p.code} · ${p.name}`})).sort((a,b)=>a.l.localeCompare(b.l))},
-      {k:'lot',label:'Lot / batch number',req:1,hint:'Printed on the pouch'},
-      {k:'expiry',label:'Expiry date',in:'date'},
-      {k:'qty',label:'Packs claimed',in:'number',req:1,def:1,hint:'Single packs, not boxes — ten packs make a box'},
-      {k:'tagId',label:'Tag ID',hint:'The RFID tag on the pack, if it carries one'},
-      {k:'value',label:'Value of the packs',in:'money',hint:'Leave blank and the list price is used — a tenth of the box price for each pack'},
-
-      {k:'__ch3',label:'What went wrong',in:'head',wide:1},
-      {k:'fault',label:'Fault',in:'select',op:CLAIM_FAULTS,req:1},
-      {k:'impact',label:'Effect on the case',in:'select',op:CLAIM_IMPACT,def:'None — spotted before the case',req:1},
-      {k:'detail',label:'What happened',in:'textarea',wide:1,
-        hint:'Enough for Ziemer AG to judge it without ringing back — the error shown, how far into the case it failed, what the pouch looked like'},
-
-      {k:'__ch4',label:'Ziemer AG',in:'head',wide:1,hint:'Fills in as the claim moves along — the fields appear as the status changes'},
-      {k:'status',label:'Status',in:'select',op:CLAIM_STATUS,def:'Draft',req:1},
-      {k:'sentDate',label:'Sent to Ziemer AG',in:'date',when:'sent'},
-      {k:'approver',label:'Decided by',when:'decided',hint:'The person at Ziemer AG who signed it off'},
-      {k:'approvedDate',label:'Date decided',in:'date',when:'decided'},
-      {k:'rmaNo',label:'Ziemer AG reference',when:'decided',hint:'The RMA or case number they quote back, if they give one'},
-      {k:'rejectReason',label:'Reason given',in:'textarea',wide:1,when:'rejected'},
-
-      {k:'__ch5',label:'Compensation',in:'head',wide:1,when:'good',
-        hint:'Nothing has to go back to Ziemer AG — this is only what reaches the customer'},
-      {k:'compensation',label:'Form of compensation',in:'select',op:CLAIM_COMP,when:'good'},
-      {k:'replaceQty',label:'Replacement packs',in:'number',when:'good|replace',hint:'Leave blank if the same number went back out'},
-      {k:'replaceLot',label:'Replacement lot',when:'good|replace'},
-      {k:'dispatchDate',label:'Dispatched on',in:'date',when:'good|replace'},
-      {k:'carrier',label:'Carrier / tracking',when:'good|replace'},
-      {k:'receivedDate',label:'Received by the customer',in:'date',when:'good|replace'},
-      {k:'creditNo',label:'Credit note number',when:'good|credit'},
-      {k:'creditValue',label:'Credit note value',in:'money',when:'good|credit'},
-
-      {k:'note',label:'Notes',in:'textarea',wide:1},
-      {k:'__docs',label:'Attachments',in:'docpanel',wide:1}]},
   engineer:{key:'engineers',
     emptyTitle:'No engineers recorded yet',
     emptyHint:'Press “+ Add record”, or log a service visit and whoever attended is added here for you.',unique:'name',
@@ -6147,37 +6039,6 @@ function planReport(month){
         </tbody></table>`).join('')}`:''}
     <div class="foot"><span>Visit plan ${esc(monthName(month))}</span><span>Ziemer Ophthalmic Systems (Thailand)</span></div>`;
 }
-function pageClaims(){
-  const C=(DB.claims||[]).map(CFG.claim.compute);
-  const open=C.filter(c=>c.open), year=String(new Date().getFullYear());
-  const yr=C.filter(c=>c.year===year);
-  const settled=C.filter(c=>!c.open&&c.days!=null);
-  const avg=settled.length?settled.reduce((s,c)=>s+c.days,0)/settled.length:null;
-  const won=C.filter(c=>/^(Approved|Partly approved|Replacement sent|Closed)$/.test(c.status||'')).length;
-  /* one lot failing at two hospitals is a batch question, not a bad pack */
-  const lots={};
-  C.forEach(c=>{ if(!c.lot) return; const k=norm(c.lot);
-    const L=lots[k]=lots[k]||{lot:c.lot,n:0,qty:0,sites:new Set()};
-    L.n++; L.qty+=(+c.qty||0); if(c.site) L.sites.add(c.site); });
-  const bad=Object.values(lots).filter(l=>l.sites.size>1||l.n>2).sort((a,b)=>b.n-a.n);
-  const stale=open.filter(c=>(c.days||0)>30);
-  return `${C.length?`<div class="grid kpis">
-      ${kpi('Claims in '+year,yr.length,`${fmtN(yr.reduce((s,c)=>s+(+c.qty||0),0),0)} packs · ${fmtMs(yr.reduce((s,c)=>s+(+c.value||0),0))} at list`,'')}
-      ${kpi('Still open',open.length,open.length?`oldest ${Math.max(...open.map(c=>c.days||0))} days`:'nothing outstanding','n5')}
-      ${kpi('Turnaround',avg==null?'—':fmtN(avg,0)+' days',`average across ${settled.length} settled claim${settled.length===1?'':'s'}`,'n2')}
-      ${kpi('Settled in our favour',won,`${C.filter(c=>c.status==='Rejected').length} rejected · ${C.filter(c=>c.status==='Draft').length} still a draft`,'n6')}
-    </div>`:''}
-  ${stale.length?`<div class="note amber"><b>${stale.length} claim${stale.length===1?'':'s'} ${stale.length===1?'has':'have'} been open over a month.</b>
-      ${stale.slice(0,5).map(c=>`<div class="stat-row"><span><span class="mono">${esc(c.claimNo||'—')}</span> · ${esc(c.accountName||c.site||'')}</span>
-        <span>${c.days} days · ${esc(c.status||'Draft')}</span></div>`).join('')}
-    </div>`:''}
-  ${bad.length?`<div class="note amber"><b>${bad.length} lot${bad.length===1?'':'s'} claimed more than once.</b>
-      A lot that fails at more than one hospital is a batch question for Ziemer AG rather than a single bad pack.
-      ${bad.slice(0,6).map(l=>`<div class="stat-row"><span class="mono">${esc(l.lot)}</span>
-        <span>${l.n} claim${l.n===1?'':'s'} · ${fmtN(l.qty,0)} pack${l.qty===1?'':'s'} · ${[...l.sites].join(', ')||'site not recorded'}</span></div>`).join('')}
-    </div>`:''}
-  ${tableCard(CFG.claim)}`;
-}
 function pageVisits(){
   const V=DB.visits.map(CFG.visit.compute);
   const from=(ui2.svcFrom||dISO(addMonths(new Date(),-3))), to=(ui2.svcTo||dISO(new Date()));
@@ -6750,7 +6611,7 @@ function render(){
     el.innerHTML = page==='planner'?pagePlanner():page==='visit'?pageVisits():page==='usage'?pageUsage():page==='users'?pageUsers():page==='io'?pageIO():page==='packan'?pagePackAnalytics():page==='orders'?pageOrders():page==='svc'?pageContracts()
       :page==='pm'?pagePM():page==='machine'?pageMachine():page==='catalog'?pageCatalog():page==='dash'?pageDash()
       :page==='analytics'?pageAnalytics():page==='c360'?pageAccounts()
-      :page==='surg'?pageSurgeons():page==='claim'?pageClaims():page==='pipe'?pagePipe():page==='market'?pageMarket():page==='price'?pagePrice():page==='data'?pageData()
+      :page==='surg'?pageSurgeons():page==='pipe'?pagePipe():page==='market'?pageMarket():page==='price'?pagePrice():page==='data'?pageData()
       :tableCard(CFG[page])+(page==='base'?ageLegend():'');
   }catch(err){ console.error(err);
     el.innerHTML=`<div class="note amber"><b>This page could not be drawn.</b> ${esc(err&&err.message||String(err))}
@@ -6925,7 +6786,7 @@ function narrowFollowers(ov){
     if(keep&&!list.some(o=>String(o.v)===String(keep))) sel.value='';
     const note=sel.parentElement.querySelector('.followhint');
     if(note) note.textContent=acct
-      ? (mine.length?`${mine.length} site${mine.length===1?' belongs':'s belong'} to this account`
+      ? (mine.length?`${mine.length} site${mine.length===1?'':'s'} belong to this account`
          :'This account has no sites recorded — showing every site')
       : 'Choose an account and this list narrows to its sites';
   });
@@ -7045,7 +6906,7 @@ function fieldHTML(f,rec){
         : 'Nothing attached yet.'}
         <div style="margin-top:8px"><button type="button" class="btn sm" data-adddoc="${esc(kind)}|${esc(rec.id)}">+ Attach a document</button></div></div></div>`;
   }
-  else if(f.in==='head') return `<div class="fld wide fhead" ${f.when?`data-when="${f.when}"`:''}><b>${esc(f.label)}</b>${f.hint?`<span class="hint">${f.hint}</span>`:''}</div>`;
+  else if(f.in==='head') return `<div class="fld wide fhead"><b>${esc(f.label)}</b>${f.hint?`<span class="hint">${f.hint}</span>`:''}</div>`;
   else if(f.in==='docfile'){
     return `<div class="fld wide"><label>${f.label}</label>
       <div class="docfile">
@@ -7147,11 +7008,6 @@ function livePreview(cfgKey,o){
         if(st==='On hold') return `<b style="color:var(--amber)">On hold</b> · carried at half its progress until it moves again`;
         return `Progress <b>${fmtP(pr)}</b> · weighted value <b>${fmtM(offer*pr)}</b>${t.lines.length?` · weighted gross profit <b>${fmtM((exVat(offer)-t.cost)*pr)}</b>`:''}`; })()}
       · consumables <b>${fmtMs((+o.estPacks||0)*A().rppIncl)}/yr</b>`; }
-  if(cfgKey==='claim'){ const it=catItem(o.code)||{};
-    const v=(+o.value||0)||((+it.listIncl||0)/10*(+o.qty||0));
-    const lot=o.lot?(DB.claims||[]).filter(c=>c.id!==o.id&&c.lot&&norm(c.lot)===norm(o.lot)).length:0;
-    return `${fmtN(o.qty||0,0)} pack${(+o.qty||0)===1?'':'s'} · <b>${fmtMs(v)}</b>${
-      lot?` · <b style="color:var(--amber)">this lot has been claimed ${lot} time${lot===1?'':'s'} before</b>`:''}`; }
   if(cfgKey==='market'){ return `${o.femto?`Femto brand <b>${esc(brandOf((o.femto||'').split(',')[0])||'—')}</b>`:'No femtosecond system recorded'}${/ziemer/i.test(o.femto||'')?' · <b style="color:var(--teal)">Ziemer site</b>':''}`; }
   return '';
 }
@@ -7884,66 +7740,6 @@ function openForm(cfgKey,id,preset){
   /* narrow the followers once when the form opens, and again whenever the field
      they follow is changed */
   narrowFollowers(ov);
-  if(cfgKey==='claim'){
-    const no=ov.querySelector('[data-fk="claimNo"]'); if(no&&!no.value) no.value=nextClaimNo();
-    const dt=ov.querySelector('[data-fk="date"]');    if(dt&&!dt.value) dt.value=dISO(new Date());
-    const st=ov.querySelector('[data-fk="status"]'), cp=ov.querySelector('[data-fk="compensation"]');
-    /* the paperwork appears as the claim moves along, so a draft stays short */
-    const tog=()=>{ const v=st.value||'Draft', i=CLAIM_STATUS.indexOf(v), on=new Set();
-      if(i>=1) on.add('sent');
-      if(i>=3) on.add('decided');
-      if(v==='Rejected') on.add('rejected');
-      if(i>=3&&v!=='Rejected'){ const c=cp?cp.value:'';
-        on.add('good');
-        if(/credit/i.test(c)&&!/both/i.test(c)) on.add('credit');
-        else if(/replacement/i.test(c)&&!/both/i.test(c)) on.add('replace');
-        else { on.add('credit'); on.add('replace'); } }
-      ov.querySelectorAll('.fld[data-when]').forEach(el=>{
-        const want=el.dataset.when.split('|');
-        /* good|replace means: only once the claim is settled AND a replacement is due */
-        el.style.display=want.every(w=>on.has(w))?'':'none'; });
-      const sd=ov.querySelector('[data-fk="sentDate"]'); if(sd&&i>=1&&!sd.value) sd.value=dISO(new Date());
-      const ad=ov.querySelector('[data-fk="approvedDate"]'); if(ad&&i>=3&&!ad.value) ad.value=dISO(new Date());
-      refresh(); };
-    st.addEventListener('change',tog); cp&&cp.addEventListener('change',tog); tog();
-    /* the machine list narrows to the units standing at the site that reported it */
-    const acc=ov.querySelector('[data-fk="accountId"]'), site=ov.querySelector('[data-fk="locationId"]'),
-          ser=ov.querySelector('[data-fk="serial"]'), who=ov.querySelector('[data-fk="reportedBy"]');
-    const hintOf=el=>el&&el.closest('.fld')?el.closest('.fld').querySelector('.hint'):null;
-    const serHint=hintOf(ser), whoHint=hintOf(who);
-    const narrowSer=()=>{ if(!ser) return; const keep=ser.value;
-      const mine=DB.installedBase.filter(m=>site&&site.value?m.locationId===site.value
-        :acc&&acc.value?(locById(m.locationId)||{}).accountId===acc.value:false);
-      const scoped=!!((site&&site.value)||(acc&&acc.value));
-      /* a serial already on the record stays selectable even if it has since moved */
-      const show=scoped?(keep&&!mine.some(m=>m.serial===keep)
-        ? [...mine,...DB.installedBase.filter(m=>m.serial===keep)] : mine) : DB.installedBase;
-      ser.innerHTML='<option value=""></option>'+show.map(m=>
-        `<option value="${esc(m.serial)}" ${m.serial===keep?'selected':''}>${esc(m.serial+' · '+(m.model||''))}</option>`).join('');
-      if(serHint) serHint.textContent=!scoped?'Choose the account first and this narrows to its machines'
-        :mine.length?`${mine.length} machine${mine.length===1?'':'s'} at ${site&&site.value?'this site':'this account'}`
-        :'No machine is recorded there — leave it blank if the pack never reached one'; };
-    /* the reporter is someone recorded at that account, or working at that site */
-    const narrowWho=()=>{ if(!who) return; const keep=who.value;
-      const names=contactNames(acc?acc.value:'',site?site.value:'');
-      const all=keep&&!names.includes(keep)?[keep,...names]:names;
-      who.innerHTML='<option value=""></option>'+all.map(n=>
-        `<option ${n===keep?'selected':''}>${esc(n)}</option>`).join('');
-      if(whoHint) whoHint.textContent=names.length
-        ? `${names.length} ${names.length===1?'person is':'people are'} recorded there`
-        : 'Nobody is recorded there yet — add them on the Contacts page first'; };
-    /* and the other way round: a machine chosen first says where it stands */
-    const fromSer=()=>{ if(!ser||!ser.value) return;
-      const m=DB.installedBase.find(x=>x.serial===ser.value); if(!m||!m.locationId) return;
-      const l=locById(m.locationId)||{}; let moved=false;
-      if(acc&&!acc.value&&l.accountId){ acc.value=l.accountId; moved=true; }
-      if(site&&!site.value){ narrowFollowers(ov); site.value=m.locationId; moved=true; }
-      if(moved){ narrowWho(); refresh(); } };
-    acc&&acc.addEventListener('change',()=>setTimeout(()=>{narrowSer();narrowWho();},0));
-    site&&site.addEventListener('change',()=>{narrowSer();narrowWho();});
-    ser&&ser.addEventListener('change',fromSer);
-    narrowSer(); narrowWho();
-  }
   if(cfgKey==='surg'){
     const pt=ov.querySelector('[data-fk="pattern"]');
     const tog=()=>ov.querySelectorAll('.fld[data-when]').forEach(el=>{
@@ -8040,7 +7836,6 @@ function openForm(cfgKey,id,preset){
       if(!out.url&&!out.data&&!out.path){ toast('Give it a link, or choose a file'); return; }
       out.kind=out.kind||rec.kind; out.refId=out.refId||rec.refId;
     }
-    if(cfgKey==='claim'&&!String(out.claimNo||'').trim()) out.claimNo=nextClaimNo();
     if(cfgKey==='plan'&&!out.createdOn) out.createdOn=rec.createdOn||dISO(new Date());
     if(cfgKey==='plan'&&out.pmSlot){
       const slot=(DB.pmPlan||[]).find(s=>s.id===out.pmSlot);
@@ -8048,7 +7843,7 @@ function openForm(cfgKey,id,preset){
       if(slot&&out.engineer) slot.plannedEngineer=asList(out.engineer)[0]||'';
     }
     delete out.__dockind;
-    ['contact','buyer','caseSurgeon','reportedBy','handler'].forEach(k=>{ if(typeof out[k]==='string'&&out[k].includes(' · ')) out[k]=out[k].split(' · ')[0]; });
+    ['contact','buyer','caseSurgeon'].forEach(k=>{ if(typeof out[k]==='string'&&out[k].includes(' · ')) out[k]=out[k].split(' · ')[0]; });
     if(cfgKey==='contact'&&id&&rec.name&&out.name&&rec.name!==out.name) renameContact(rec.name,out.name);
     if(cfgKey==='pipe'){ out.cfgLines=cfgLines.filter(l=>l.code&&(+l.qty||0)>0)
         .map(l=>({id:l.id,code:l.code,qty:+l.qty||1,unitIncl:+l.unitIncl||0}));
@@ -8112,10 +7907,10 @@ function toCSV(key){
 const TABLE_LABELS={accounts:'Accounts',docs:'Documents',contacts:'Contacts',usage:'Machine usage',plans:'Visit plans',duties:'Duty roster',locations:'Locations',priceList:'Price list',engineers:'Engineers',
   installedBase:'Installed base',procedurePack:'Pack agreements',packOrders:'Pack orders',
   serviceContract:'Service contracts',pmPlan:'PM schedule',visits:'Service visits',pipeline:'Pipeline',
-  lasikCenters:'LASIK centres',pricingInputs:'Volume inputs',tierModel1:'Tier model #1',tierModel2:'Tier model #2',orSchedule:'Surgeon schedules',moves:'Machine moves',claims:'Product claims'};
+  lasikCenters:'LASIK centres',pricingInputs:'Volume inputs',tierModel1:'Tier model #1',tierModel2:'Tier model #2',orSchedule:'Surgeon schedules',moves:'Machine moves'};
 const TABLE_KEYS={accounts:'name',docs:'id',contacts:'name',usage:'id',plans:'id',duties:'weekStart',locations:'name',priceList:'code',engineers:'name',installedBase:'serial',
   packOrders:'id',procedurePack:'id',serviceContract:'id',pmPlan:'id',visits:'id',pipeline:'customer',
-  lasikCenters:'hospital',pricingInputs:'customer',tierModel1:'tier',tierModel2:'tier',orSchedule:'id',moves:'id',claims:'id'};
+  lasikCenters:'hospital',pricingInputs:'customer',tierModel1:'tier',tierModel2:'tier',orSchedule:'id',moves:'id'};
 function parseCSV(text){
   const rows=[]; let row=[], cell='', q=false;
   text=String(text).replace(/^\uFEFF/,'').replace(/\r\n/g,'\n').replace(/\r/g,'\n');
