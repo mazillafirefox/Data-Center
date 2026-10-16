@@ -544,7 +544,7 @@ body.pm-dragging{user-select:none}
 </div>
 
 <script>
-const BUILD='2026-10-01 09:40';
+const BUILD='2026-10-16 17:05';
 /* Boundaries from the Royal Thai Survey Department administrative set
    (ADM1 provinces, ADM2 districts), simplified along shared borders so
    neighbouring shapes meet exactly rather than leaving white slivers.
@@ -620,6 +620,11 @@ insert into ziemer_workspace (id, data) values ('ziemer-th', '{}'::jsonb)
 let DB=null, page='dash', query='', filters={}, sortKey=null, sortDir=1, charts=[], expanded={},
     GF={model:null,province:null,status:null,brand:null,account:null,ageBucket:null}, theme='light', chartMode={};
 const uid=()=>'r'+Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-3);
+/* CLM-2026-001 — runs in its own sequence each year so the number says when */
+function nextClaimNo(){ const y=new Date().getFullYear(), pre='CLM-'+y+'-';
+  const n=(DB.claims||[]).map(c=>String(c.claimNo||''))
+    .filter(s=>s.startsWith(pre)).map(s=>parseInt(s.slice(pre.length),10)||0);
+  return pre+String((n.length?Math.max(...n):0)+1).padStart(3,'0'); }
 /* surgeon schedules — needed before the table definitions read them */
 const OR_PATTERNS=['Every week','One day','Away'];
 const OR_WEEKS=['Every week','1st','2nd','3rd','4th','Last','1st & 3rd','2nd & 4th','Every other week'];
@@ -627,7 +632,11 @@ const OR_SLOTS=['Morning','Afternoon','All day','Evening'];
 const OR_KINDS=['Surgery · LASIK / CLEAR','Surgery · cataract','Surgery · mixed','Clinic (OPD)'];
 const OR_POLICIES=['Keep the whole day free','Use the half-day without surgery'];
 const OR_DOW=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-const LISTS=['docs','duties','plans','usage','contacts','accounts','locations','priceList','engineers','visits','pmPlan','packOrders','installedBase','procedurePack','serviceContract','pipeline','lasikCenters','pricingInputs','tierModel1','tierModel2','orSchedule','moves'];
+const CLAIM_STATUS=['Draft','Sent to Ziemer AG','Under review','Approved','Partly approved','Rejected','Replacement sent','Closed'];
+const CLAIM_FAULTS=['Vacuum loss / suction failure','Packaging damaged','Sterile barrier broken','Cone or applanation defect','Expired on arrival','Wrong model shipped','Short shipment','Damaged in transit','Device rejected the pack','Other'];
+const CLAIM_IMPACT=['None — spotted before the case','Case delayed','Surgery postponed','Surgery cancelled','Patient or eye affected'];
+const CLAIM_COMP=['Replacement pack','Credit note','Both'];
+const LISTS=['claims','docs','duties','plans','usage','contacts','accounts','locations','priceList','engineers','visits','pmPlan','packOrders','installedBase','procedurePack','serviceContract','pipeline','lasikCenters','pricingInputs','tierModel1','tierModel2','orSchedule','moves'];
 
 /* ─── persistence: pluggable back end ───────────────────────────────────
    Drivers: 'auto'  → Claude artifact storage, else this browser
@@ -1296,8 +1305,13 @@ async function buildCheck(){
       blockingScreen('This page is out of date',
         `<div class="note amber"><b>You are running build ${esc(BUILD)}; the workspace is on ${esc(seen)}.</b>
           An old copy can write data in a shape the newer one does not expect.</div>
-         <div class="mini" style="margin-top:10px">Reload to pick up the current version. On an iPad, pull down on the page to force it.</div>`,
-        `<button class="btn pri" onclick="location.reload(true)">Reload now</button>`);
+         <div class="mini" style="margin-top:10px">A plain refresh often hands back the same cached page.
+           <b>Get the newest version</b> below fetches it afresh and clears the stale copy out.</div>
+         <div class="mini" style="margin-top:8px">If it still says the same build afterwards, force it by hand:
+           <b>Windows</b> Ctrl + Shift + R · <b>Mac</b> Cmd + Shift + R ·
+           <b>iPhone or iPad</b> Settings → Apps → Safari → Clear History and Website Data,
+           or hold the reload arrow in the address bar and choose Reload Without Content Blockers.</div>`,
+        `<button class="btn pri" onclick="hardReload()">Get the newest version</button>`);
       return;
     }
     if(!seen||BUILD>seen) await RecStore.push([row]);
@@ -1369,6 +1383,47 @@ function offerUnsent(){
      <div class="mini" style="margin-top:12px">Sending adds and updates them on the server. Nothing on the server is deleted. If you discard them they are gone for good, so send unless you know they are duplicates.</div>`,
     `<button class="btn" data-unsent="drop">Discard them</button>
      <button class="btn pri" data-unsent="send">Send them to the database</button>`);
+}
+/* location.reload(true) has been ignored by every browser since 2015, so a
+   plain reload hands back the same cached page. A query string the browser has
+   never seen forces a real fetch; the background reload-fetch repairs the cache
+   entry for the bare address as well, so the next ordinary visit is current. */
+/* Asks the address this page was served from what build it is publishing now.
+   The database check only fires once somebody else has loaded the new build;
+   this one answers "did my upload actually land?" straight away. */
+async function versionProbe(btn){
+  if(!/^https?:/.test(location.protocol)){
+    toast('This copy was opened from a file, so there is no published address to check'); return; }
+  const was=btn?btn.textContent:'';
+  if(btn){ btn.disabled=true; btn.textContent='Checking…'; }
+  try{
+    const r=await fetch(location.pathname+'?probe='+Date.now(),{cache:'reload'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const m=/const BUILD='([^']+)'/.exec(await r.text());
+    const served=m&&m[1];
+    if(!served) toast('That address did not return a copy of this app');
+    else if(served>BUILD)
+      blockingScreen('A newer version is published',
+        `<div class="note amber"><b>You are running build ${esc(BUILD)}; the address is serving ${esc(served)}.</b>
+          Your browser is holding an old copy of the page.</div>
+         <div class="mini" style="margin-top:10px">A plain refresh usually hands back the same cached page.
+           <b>Get the newest version</b> below fetches it afresh.</div>`,
+        `<button class="btn" onclick="this.closest('.hardstop').remove()">Not now</button>
+         <button class="btn pri" onclick="hardReload()">Get the newest version</button>`);
+    else if(served<BUILD)
+      toast(`This copy (${BUILD}) is newer than the published one (${served}) — the upload may not have gone through`);
+    else toast(`You are on the newest version · build ${BUILD}`);
+  }catch(e){ toast('Could not reach the published copy — '+(e&&e.message||e)); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent=was; } }
+}
+async function hardReload(){
+  try{ if(window.caches){ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.delete(k))); } }catch(e){}
+  try{ if(navigator.serviceWorker){ const rs=await navigator.serviceWorker.getRegistrations();
+    await Promise.all(rs.map(r=>r.unregister())); } }catch(e){}
+  try{ await fetch(location.pathname,{cache:'reload'}); }catch(e){}
+  const u=new URL(location.href);
+  u.searchParams.set('v',Date.now());
+  location.replace(u.toString());
 }
 function blockingScreen(title,body,actions){
   document.querySelectorAll('.hardstop').forEach(x=>x.remove());
@@ -1794,6 +1849,8 @@ const VIEWS={
   catalog:{title:'Price List',sub:'Ziemer published price list — the basis for cost, list price and margin',icon:'M4 4h10l6 6v10H4zM14 4v6h6M8 14h8M8 17h5',key:'priceList'},
   surg:{title:'Surgeon Schedules',sub:'When each surgeon operates or holds clinic at each site — the visit plan works around it',icon:'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2zM9 16l2 2 4-4',key:'orSchedule'},
   move:{title:'Machine Moves',sub:'Every time a unit changed site — demo placements, sales, loans and returns',icon:'M5 12h14M12 5l7 7-7 7M3 5v14',key:'moves'},
+  claim:{title:'Product Claims',sub:'Faulty procedure packs — the lot, the decision from Ziemer AG and what the customer got back',
+    icon:'M10.3 3.9L1.8 18a2 2 0 001.7 3h16.9a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01',key:'claims'},
   engineer:{title:'Engineers',sub:'Field service and application engineers',icon:'M16 21v-2a4 4 0 00-8 0v2M12 11a4 4 0 100-8 4 4 0 000 8M20 8v6M23 11h-6',key:'engineers'},
   packan:{title:'Pack Analytics',sub:'Consumable performance — volume, mix, realised price and growth',
     icon:'M3 3v18h18M7 14l3-4 3 3 4-6'},
@@ -1820,9 +1877,9 @@ const VIEWS={
   data:{title:'Data & Quality',sub:'Data quality, connection settings and bulk import',icon:'M12 4c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3zM4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7'}
 };
 function navHTML(){
-  const grp=[['Insight',['dash','analytics','packan','c360']],['Master data',['account','contact','surg','location','catalog','engineer']],['Records',['base','move','usage','pack','orders','svc','pm','planner','visit']],['Growth',['pipe','market','price']],['System',['doc','users','io','data']]];
+  const grp=[['Insight',['dash','analytics','packan','c360']],['Master data',['account','contact','surg','location','catalog','engineer']],['Records',['base','move','usage','pack','orders','claim','svc','pm','planner','visit']],['Growth',['pipe','market','price']],['System',['doc','users','io','data']]];
   return grp.map(([lb,ks])=>`<div class="nav-label">${lb}</div>`+ks.map(k=>{const v=VIEWS[k];
-    let n=v.key?DB[v.key].length:(v.badge?(v.badge()||''):'');
+    let n=v.key?(DB[v.key]||[]).length:(v.badge?(v.badge()||''):'');
     return `<button class="nav-item ${page===k?'on':''}" data-p="${k}"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="${v.icon}"/></svg><span>${v.title}</span>${n!==''?`<span class="badge${v.badge?' alert':''}">${n}</span>`:''}</button>`;}).join('')).join('');
 }
 
@@ -2008,7 +2065,7 @@ const VISIT_TEMPLATE={
   'Sales visit':'Customer call.\nMet with:\nDiscussed:\nNext step:',
   'Remote support':'Remote support.\nReported by:\nDiagnosis:\nResolution:'};
 const DOC_KINDS={machine:'Machine',contract:'Service contract',visit:'Service visit',
-  account:'Account',location:'Site',plan:'Planned visit',pipe:'Opportunity'};
+  account:'Account',location:'Site',plan:'Planned visit',pipe:'Opportunity',claim:'Product claim'};
 const DOC_LIMIT=800*1024;   /* anything larger belongs on a drive, not in the workspace */
 function docPanel(kind,refId,blurb,also){
   const list=docsFor(kind,refId).map(d=>({...d,from:''}));
@@ -2612,6 +2669,105 @@ const CFG={
         hint:'Leave blank if it came from Ziemer stock'},
       {k:'toLocationId',label:'To site',in:'select',req:1,pairs:()=>DB.locations.map(l=>({v:l.id,l:locLabel(l)})).sort((a,b)=>a.l.localeCompare(b.l))},
       {k:'note',label:'Note',in:'textarea',wide:1}]},
+  claim:{key:'claims',todayKey:'date',
+    emptyTitle:'No claims recorded',
+    emptyHint:'Press “+ Add record” when a procedure pack arrives faulty or fails on the device. The lot number, the decision from Ziemer AG and the replacement all stay on the one record.',
+    filters:[{k:'status',label:'Status'},{k:'accountName',label:'Account'},{k:'fault',label:'Fault'},
+      {k:'year',label:'Year',get:r=>String(r.date||'').slice(0,4)}],
+    sort:(a,b)=>String(b.date||'').localeCompare(String(a.date||''))||String(b.claimNo||'').localeCompare(String(a.claimNo||'')),
+    compute:r=>{ const l=locById(r.locationId)||{}, a=accById(r.accountId)||accById(l.accountId)||{};
+      const it=catItem(r.code)||{};
+      const open=!/^(Closed|Rejected)$/.test(r.status||'');
+      /* an open claim is counted to today; a settled one stops the day it settled */
+      const end=open?'':(r.receivedDate||r.dispatchDate||r.approvedDate||r.sentDate||'');
+      const days=r.date?Math.max(0,Math.round(((end?new Date(end):new Date())-new Date(r.date))/864e5)):null;
+      const sameLot=r.lot?(DB.claims||[]).filter(c=>c.lot&&norm(c.lot)===norm(r.lot)).length:0;
+      return {...r,year:String(r.date||'').slice(0,4),accountName:a.name||'',site:l.name||'',
+        item:it.name||'',value:(+r.value||0)||((+it.listIncl||0)/10*(+r.qty||0)),
+        open,days,sameLot}; },
+    cols:[{k:'claimNo',label:'Claim',r:r=>`<span class="mono">${esc(r.claimNo||'—')}</span>`},
+      {k:'date',label:'Reported',r:r=>`<span class="mono">${esc(r.date||'')}</span>`},
+      {k:'accountName',label:'Account',w:160,r:r=>r.accountName?esc(r.accountName):'<span class="tag warn">not linked</span>'},
+      {k:'site',label:'Site',w:150},
+      {k:'item',label:'Item',w:190,tip:'The product code is on the record',
+        r:r=>esc((r.item||r.code||'').replace(/^(Procedure Pack|PP) /i,''))||'—'},
+      {k:'lot',label:'Lot',r:r=>r.lot?`<span class="mono">${esc(r.lot)}</span>${r.sameLot>1?` <span class="tag warn" title="This lot has been claimed ${r.sameLot} times">×${r.sameLot}</span>`:''}`:'<span class="tag warn">no lot</span>'},
+      {k:'qty',label:'Packs',t:'n',r:r=>fmtN(r.qty,0)},
+      {k:'value',label:'Value',t:'n',r:r=>fmtM(r.value)},
+      {k:'fault',label:'Fault',w:170},
+      {k:'impact',label:'Effect',r:r=>/affected|cancelled/i.test(r.impact||'')?`<span class="tag bad">${esc(r.impact)}</span>`
+        :/postponed|delayed/i.test(r.impact||'')?`<span class="tag warn">${esc(r.impact)}</span>`
+        :`<span class="tag ok">none</span>`},
+      {k:'status',label:'Status',r:r=>`<span class="tag ${/Rejected/.test(r.status||'')?'bad'
+        :/Closed|Replacement sent/.test(r.status||'')?'ok'
+        :/Approved/.test(r.status||'')?'tl':'nv'}">${esc(r.status||'Draft')}</span>`},
+      {k:'days',label:'Age',t:'n',r:r=>r.days==null?'—':r.open
+        ?`<span class="tag ${r.days>30?'bad':r.days>14?'warn':'nv'}">${r.days} d open</span>`
+        :`<span class="mini">${r.days} d</span>`},
+      {k:'compensation',label:'Compensation',r:r=>r.compensation?`<span class="tag tl">${esc(r.compensation)}</span>`:'—'},
+      {k:'dispatchDate',label:'Dispatched',r:r=>r.dispatchDate?`<span class="mono">${esc(r.dispatchDate)}</span>`:'—'},
+      {k:'__print',label:'',r:r=>`<button class="btn sm" data-claimform="${esc(r.id)}"
+        title="Print this one claim, ready to send to Ziemer AG">Print</button>`}],
+    total:rows=>`<td colspan="6">${rows.length} claim${rows.length===1?'':'s'}</td>
+      <td class="num">${fmtN(sum(rows,'qty'),0)}</td>
+      <td class="num">${fmtM(sum(rows,'value'))}</td>
+      <td colspan="7"></td>`,
+    form:[{k:'__ch1',label:'The claim',in:'head',wide:1,hint:'Who reported it, from where, and when'},
+      {k:'claimNo',label:'Claim number',hint:'Generated here — Ziemer AG issues no form of its own, so this is the reference everyone quotes'},
+      {k:'date',label:'Date reported',in:'date',req:1},
+      {k:'accountId',label:'Account',in:'select',req:1,
+        pairs:()=>DB.accounts.map(a=>({v:a.id,l:a.name})).sort((x,y)=>x.l.localeCompare(y.l))},
+      {k:'locationId',label:'Site',in:'select',follows:'accountId',
+        pairs:()=>DB.locations.map(l=>({v:l.id,l:locLabel(l)})).sort((a,b)=>a.l.localeCompare(b.l)),
+        hint:'Narrows to the sites of the account above'},
+      {k:'reportedBy',label:'Reported by',in:'select',
+        opts:rec=>contactNames(rec&&rec.accountId,rec&&rec.locationId),
+        hint:'The people recorded at that account and site'},
+      {k:'handler',label:'Handled by',in:'datalist',
+        opts:()=>DB.engineers.filter(e=>e.name&&e.active!=='No')
+          .map(e=>e.name+(e.role?' · '+e.role:'')).sort(),
+        hint:'From the Engineers page — whoever at Ziemer Thailand is chasing it'},
+      {k:'serial',label:'Machine',in:'select',
+        pairs:()=>DB.installedBase.map(m=>({v:m.serial,l:`${m.serial} · ${m.model||''}`})),
+        hint:'The units standing at the site above — picking one here fills the site in if it is still blank'},
+
+      {k:'__ch2',label:'The pack',in:'head',wide:1,hint:'Lot and expiry are what Ziemer AG traces a batch by — a claim without a lot number is hard for them to act on'},
+      {k:'code',label:'Product',in:'select',req:1,wide:1,
+        pairs:()=>DB.priceList.filter(p=>/procedure pack/i.test(p.category||''))
+          .map(p=>({v:p.code,l:`${p.code} · ${p.name}`})).sort((a,b)=>a.l.localeCompare(b.l))},
+      {k:'lot',label:'Lot / batch number',req:1,hint:'Printed on the pouch'},
+      {k:'expiry',label:'Expiry date',in:'date'},
+      {k:'qty',label:'Packs claimed',in:'number',req:1,def:1,hint:'Single packs, not boxes — ten packs make a box'},
+      {k:'tagId',label:'Tag ID',hint:'The RFID tag on the pack, if it carries one'},
+      {k:'value',label:'Value of the packs',in:'money',hint:'Leave blank and the list price is used — a tenth of the box price for each pack'},
+
+      {k:'__ch3',label:'What went wrong',in:'head',wide:1},
+      {k:'fault',label:'Fault',in:'select',op:CLAIM_FAULTS,req:1},
+      {k:'impact',label:'Effect on the case',in:'select',op:CLAIM_IMPACT,def:'None — spotted before the case',req:1},
+      {k:'detail',label:'What happened',in:'textarea',wide:1,
+        hint:'Enough for Ziemer AG to judge it without ringing back — the error shown, how far into the case it failed, what the pouch looked like'},
+
+      {k:'__ch4',label:'Ziemer AG',in:'head',wide:1,hint:'Fills in as the claim moves along — the fields appear as the status changes'},
+      {k:'status',label:'Status',in:'select',op:CLAIM_STATUS,def:'Draft',req:1},
+      {k:'sentDate',label:'Sent to Ziemer AG',in:'date',when:'sent'},
+      {k:'approver',label:'Decided by',when:'decided',hint:'The person at Ziemer AG who signed it off'},
+      {k:'approvedDate',label:'Date decided',in:'date',when:'decided'},
+      {k:'rmaNo',label:'Ziemer AG reference',when:'decided',hint:'The RMA or case number they quote back, if they give one'},
+      {k:'rejectReason',label:'Reason given',in:'textarea',wide:1,when:'rejected'},
+
+      {k:'__ch5',label:'Compensation',in:'head',wide:1,when:'good',
+        hint:'Nothing has to go back to Ziemer AG — this is only what reaches the customer'},
+      {k:'compensation',label:'Form of compensation',in:'select',op:CLAIM_COMP,when:'good'},
+      {k:'replaceQty',label:'Replacement packs',in:'number',when:'good|replace',hint:'Leave blank if the same number went back out'},
+      {k:'replaceLot',label:'Replacement lot',when:'good|replace'},
+      {k:'dispatchDate',label:'Dispatched on',in:'date',when:'good|replace'},
+      {k:'carrier',label:'Carrier / tracking',when:'good|replace'},
+      {k:'receivedDate',label:'Received by the customer',in:'date',when:'good|replace'},
+      {k:'creditNo',label:'Credit note number',when:'good|credit'},
+      {k:'creditValue',label:'Credit note value',in:'money',when:'good|credit'},
+
+      {k:'note',label:'Notes',in:'textarea',wide:1},
+      {k:'__docs',label:'Attachments',in:'docpanel',wide:1}]},
   engineer:{key:'engineers',
     emptyTitle:'No engineers recorded yet',
     emptyHint:'Press “+ Add record”, or log a service visit and whoever attended is added here for you.',unique:'name',
@@ -6039,6 +6195,264 @@ function planReport(month){
         </tbody></table>`).join('')}`:''}
     <div class="foot"><span>Visit plan ${esc(monthName(month))}</span><span>Ziemer Ophthalmic Systems (Thailand)</span></div>`;
 }
+/* ─── product claim paperwork ───────────────────────────────────────────
+   Three sheets off the same records: one claim to send to Ziemer AG, the
+   itemised list of what was claimed, and the roll-up for the quarter. */
+function claimRows(from,to){
+  return (DB.claims||[]).filter(c=>(!from||(c.date||'')>=from)&&(!to||(c.date||'')<=to))
+    .map(CFG.claim.compute).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+}
+function claimHead(title,sub){
+  return `<div class="ph"><img src="${LOGO_SRC()}" alt="Ziemer">
+    <div><h1>${esc(title)}</h1><div>Ziemer Ophthalmic Systems · Thailand</div></div>
+    <div class="t"><b>${esc(sub)}</b><div>printed ${dISO(new Date())}</div></div></div>`;
+}
+const claimFoot=s=>`<div class="foot"><span>${esc(s)}</span>
+  <span>Ziemer Ophthalmic Systems (Thailand)</span></div>`;
+
+/* one claim, laid out to be emailed to Ziemer AG as it stands */
+function claimForm(rec){
+  const r=CFG.claim.compute(rec), it=catItem(r.code)||{};
+  const l=locById(r.locationId)||{}, m=DB.installedBase.find(x=>x.serial===r.serial)||{};
+  const comp=r.compensation||'';
+  const wants=k=>new RegExp(k,'i').test(comp)||/both/i.test(comp);
+  return `${claimHead('Procedure pack claim',r.claimNo||'')}
+    <h2>Claim</h2>
+    <div class="kv">
+      <div><span>Claim number</span><b>${esc(r.claimNo||'—')}</b></div>
+      <div><span>Date reported</span><b>${esc(r.date||'—')}</b></div>
+      <div><span>Customer</span><b>${esc(r.accountName||'—')}</b></div>
+      <div><span>Site</span><b>${esc(r.site||'—')}</b></div>
+      <div><span>Reported by</span><b>${esc(r.reportedBy||'—')}</b></div>
+      <div><span>Handled by</span><b>${esc(r.handler||'—')}</b></div>
+      <div><span>Machine</span><b>${esc(r.serial||'not used on a machine')}${m.model?' · '+esc(m.model):''}</b></div>
+      <div><span>Province</span><b>${esc(l.province||'—')}</b></div>
+    </div>
+    <h2>Product claimed</h2>
+    <div class="kv">
+      <div class="wide"><span>Item</span><b>${esc(r.code||'')}${it.name?' · '+esc(it.name):''}</b></div>
+      <div><span>Lot / batch</span><b>${esc(r.lot||'not recorded')}</b></div>
+      <div><span>Expiry</span><b>${esc(r.expiry||'—')}</b></div>
+      <div><span>Packs claimed</span><b>${fmtN(r.qty,0)}</b></div>
+      <div><span>Tag ID</span><b>${esc(r.tagId||'—')}</b></div>
+      <div><span>Value at list</span><b>${fmtM(r.value)}</b></div>
+      <div><span>Other claims on this lot</span><b>${r.sameLot>1?`${r.sameLot-1} more`:'none'}</b></div>
+    </div>
+    <h2>Fault</h2>
+    <div class="kv">
+      <div><span>Fault</span><b>${esc(r.fault||'—')}</b></div>
+      <div><span>Effect on the case</span><b>${esc(r.impact||'—')}</b></div>
+    </div>
+    <div class="box" style="margin-top:7px">${esc(r.detail||'No description recorded.')}</div>
+    <h2>Decision</h2>
+    <div class="kv">
+      <div><span>Status</span><b>${esc(r.status||'Draft')}</b></div>
+      <div><span>Date sent</span><b>${esc(r.sentDate||'—')}</b></div>
+      <div><span>Decided by</span><b>${esc(r.approver||'—')}</b></div>
+      <div><span>Date decided</span><b>${esc(r.approvedDate||'—')}</b></div>
+      <div><span>Ziemer AG reference</span><b>${esc(r.rmaNo||'—')}</b></div>
+      <div><span>Days open</span><b>${r.days==null?'—':r.days+(r.open?' and counting':'')}</b></div>
+    </div>
+    ${r.rejectReason?`<div class="box" style="margin-top:7px">${esc(r.rejectReason)}</div>`:''}
+    ${comp?`<h2>Compensation</h2>
+      <div class="kv">
+        <div><span>Form</span><b>${esc(comp)}</b></div>
+        ${wants('replacement')?`<div><span>Replacement packs</span><b>${r.replaceQty?fmtN(r.replaceQty,0):fmtN(r.qty,0)}</b></div>
+        <div><span>Replacement lot</span><b>${esc(r.replaceLot||'—')}</b></div>
+        <div><span>Dispatched</span><b>${esc(r.dispatchDate||'—')}</b></div>
+        <div><span>Carrier / tracking</span><b>${esc(r.carrier||'—')}</b></div>
+        <div><span>Received by customer</span><b>${esc(r.receivedDate||'—')}</b></div>`:''}
+        ${wants('credit')?`<div><span>Credit note</span><b>${esc(r.creditNo||'—')}</b></div>
+        <div><span>Credit value</span><b>${r.creditValue?fmtM(r.creditValue):'—'}</b></div>`:''}
+      </div>
+      <div class="cap">No faulty goods are returned to Ziemer AG for this claim.</div>`:''}
+    ${r.note?`<h2>Notes</h2><div class="box">${esc(r.note)}</div>`:''}
+    <div class="sign">
+      <div><div class="line"></div><div class="cap">Ziemer Thailand · ${esc(r.handler||'')}</div></div>
+      <div><div class="line"></div><div class="cap">Ziemer AG · ${esc(r.approver||'')}</div></div>
+    </div>
+    ${claimFoot(`${r.claimNo||'Claim'} · ${r.accountName||''}`)}`;
+}
+
+/* every claim in the period, one block each, in full */
+function claimList(from,to){
+  const C=claimRows(from,to);
+  const byAcc={};
+  C.forEach(c=>(byAcc[c.accountName||'Account not linked']=byAcc[c.accountName||'Account not linked']||[]).push(c));
+  return `${claimHead('Product claim list',`${from} to ${to}`)}
+    <div class="kv">
+      <div><span>Claims listed</span><b>${C.length}</b></div>
+      <div><span>Packs claimed</span><b>${fmtN(C.reduce((s,c)=>s+(+c.qty||0),0),0)}</b></div>
+      <div><span>Customers</span><b>${Object.keys(byAcc).length}</b></div>
+      <div><span>Value at list</span><b>${fmtM(C.reduce((s,c)=>s+(+c.value||0),0))}</b></div>
+    </div>
+    ${C.length?Object.entries(byAcc).map(([acc,rows])=>`<h2>${esc(acc)}</h2>
+      ${rows.map(c=>`<table class="tight" style="margin-bottom:9px">
+        <colgroup><col style="width:14%"><col style="width:20%"><col style="width:13%"><col style="width:17%"><col style="width:10%"><col style="width:26%"></colgroup>
+        <tbody>
+        <tr><th>Claim</th><td><b>${esc(c.claimNo||'—')}</b></td>
+            <th>Reported</th><td>${esc(c.date||'')}</td>
+            <th>Status</th><td>${esc(c.status||'Draft')}${c.open&&c.days!=null?` · ${c.days} days open`:''}</td></tr>
+        <tr><th>Site</th><td>${esc(c.site||'—')}</td>
+            <th>Machine</th><td>${esc(c.serial||'—')}</td>
+            <th>Reported by</th><td>${esc(c.reportedBy||'—')}</td></tr>
+        <tr><th>Item</th><td>${esc(c.code||'')}</td>
+            <th>Lot</th><td>${esc(c.lot||'not recorded')}${c.sameLot>1?` (${c.sameLot}×)`:''}</td>
+            <th>Packs · value</th><td>${fmtN(c.qty,0)} · ${fmtM(c.value)}</td></tr>
+        <tr><th>Fault</th><td>${esc(c.fault||'—')}</td>
+            <th>Effect</th><td>${esc(c.impact||'—')}</td>
+            <th>Handled by</th><td>${esc(c.handler||'—')}</td></tr>
+        <tr><th>Decided by</th><td>${esc(c.approver||'—')}${c.approvedDate?' · '+esc(c.approvedDate):''}</td>
+            <th>Reference</th><td>${esc(c.rmaNo||'—')}</td>
+            <th>Compensation</th><td>${esc(c.compensation||'—')}${c.dispatchDate?` · sent ${esc(c.dispatchDate)}`:''}${c.creditNo?` · ${esc(c.creditNo)}`:''}</td></tr>
+        ${c.detail?`<tr><th>What happened</th><td colspan="5">${esc(String(c.detail).replace(/\s+/g,' '))}</td></tr>`:''}
+        ${c.rejectReason?`<tr><th>Reason given</th><td colspan="5">${esc(String(c.rejectReason).replace(/\s+/g,' '))}</td></tr>`:''}
+      </tbody></table>`).join('')}`).join('')
+      :'<p>No claims fall in this period.</p>'}
+    ${claimFoot(`Product claim list ${from} to ${to}`)}`;
+}
+
+/* the roll-up: where the claims are coming from and how they are settling */
+function claimReport(from,to){
+  const C=claimRows(from,to);
+  const n=Math.max(1,C.length);
+  const tally=(get)=>{ const o={};
+    C.forEach(c=>{ const k=get(c)||'not recorded';
+      const t=o[k]=o[k]||{n:0,qty:0,value:0}; t.n++; t.qty+=+c.qty||0; t.value+=+c.value||0; });
+    return Object.entries(o).sort((a,b)=>b[1].n-a[1].n); };
+  const open=C.filter(c=>c.open), settled=C.filter(c=>!c.open&&c.days!=null);
+  const avg=settled.length?settled.reduce((s,c)=>s+c.days,0)/settled.length:null;
+  const won=C.filter(c=>/^(Approved|Partly approved|Replacement sent|Closed)$/.test(c.status||''));
+  const lost=C.filter(c=>c.status==='Rejected');
+  const harm=C.filter(c=>/affected|cancelled|postponed/i.test(c.impact||''));
+  /* claims per customer only mean something against what that customer bought */
+  const bought={};
+  (DB.packOrders||[]).forEach(o=>{ if(from&&String(o.period||'')<from.slice(0,7)) return;
+    if(to&&String(o.period||'')>to.slice(0,7)) return;
+    const a=o.accountName||o.customer||''; if(!a) return;
+    bought[a]=(bought[a]||0)+(+o.qtyEA||0); });
+  const lots={};
+  C.forEach(c=>{ if(!c.lot) return; const k=norm(c.lot);
+    const L=lots[k]=lots[k]||{lot:c.lot,n:0,qty:0,sites:new Set(),faults:new Set()};
+    L.n++; L.qty+=+c.qty||0; if(c.site) L.sites.add(c.site); if(c.fault) L.faults.add(c.fault); });
+  const batch=Object.values(lots).filter(l=>l.sites.size>1||l.n>1).sort((a,b)=>b.n-a.n);
+  const tbl=(head,rows,unit)=>`<table class="tight">
+    <colgroup><col style="width:46%"><col style="width:13%"><col style="width:13%"><col style="width:14%"><col style="width:14%"></colgroup>
+    <thead><tr><th>${head}</th><th class="n">Claims</th><th class="n">Share</th><th class="n">Packs</th><th class="n">Value</th></tr></thead>
+    <tbody>${rows.map(([k,t])=>`<tr><td>${esc(k)}</td><td class="n">${t.n}</td>
+      <td class="n">${fmtP(t.n/n)}</td><td class="n">${fmtN(t.qty,0)}</td><td class="n">${fmtM(t.value)}</td></tr>`).join('')}
+    </tbody></table>`;
+  return `${claimHead('Product claim report',`${from} to ${to}`)}
+    <h2>Summary</h2>
+    <div class="kv">
+      <div><span>Claims raised</span><b>${C.length}</b></div>
+      <div><span>Packs claimed</span><b>${fmtN(C.reduce((s,c)=>s+(+c.qty||0),0),0)}</b></div>
+      <div><span>Value at list</span><b>${fmtM(C.reduce((s,c)=>s+(+c.value||0),0))}</b></div>
+      <div><span>Customers affected</span><b>${[...new Set(C.map(c=>c.accountName).filter(Boolean))].length}</b></div>
+      <div><span>Settled in our favour</span><b>${won.length}${C.length?` · ${fmtP(won.length/n)}`:''}</b></div>
+      <div><span>Rejected</span><b>${lost.length}</b></div>
+      <div><span>Still open</span><b>${open.length}${open.length?` · oldest ${Math.max(...open.map(c=>c.days||0))} days`:''}</b></div>
+      <div><span>Average turnaround</span><b>${avg==null?'no claim settled yet':fmtN(avg,0)+' days'}</b></div>
+      <div class="wide"><span>Claims that touched a patient or a list</span><b>${harm.length}${harm.length?` · ${harm.filter(c=>/affected/i.test(c.impact)).length} reached the eye`:''}</b></div>
+    </div>
+    ${harm.filter(c=>/affected/i.test(c.impact||'')).length?`<div class="box" style="margin-top:8px;border-color:#C4262E">
+      <b>Vigilance.</b> ${harm.filter(c=>/affected/i.test(c.impact||'')).length} claim${harm.filter(c=>/affected/i.test(c.impact||'')).length===1?'':'s'} in this period
+      record a patient or eye as affected. Those are reportable to Ziemer AG quality assurance separately from the commercial claim.</div>`:''}
+    <h2>By status</h2>
+    ${tbl('Status',tally(c=>c.status||'Draft'))}
+    <h2>By fault</h2>
+    ${tbl('Fault',tally(c=>c.fault))}
+    <h2>By effect on the case</h2>
+    ${tbl('Effect',tally(c=>c.impact))}
+    <h2>By customer</h2>
+    <table class="tight">
+      <colgroup><col style="width:34%"><col style="width:11%"><col style="width:11%"><col style="width:14%"><col style="width:15%"><col style="width:15%"></colgroup>
+      <thead><tr><th>Customer</th><th class="n">Claims</th><th class="n">Packs</th><th class="n">Value</th>
+        <th class="n">Packs bought</th><th class="n">Claim rate</th></tr></thead>
+      <tbody>${tally(c=>c.accountName).map(([k,t])=>{ const b=bought[k]||0;
+        return `<tr><td>${esc(k)}</td><td class="n">${t.n}</td><td class="n">${fmtN(t.qty,0)}</td>
+          <td class="n">${fmtM(t.value)}</td><td class="n">${b?fmtN(b,0):'—'}</td>
+          <td class="n">${b?fmtP(t.qty/b):'—'}</td></tr>`; }).join('')}
+      </tbody></table>
+    <div class="cap">Packs bought counts the EA invoiced to that customer over the same months, so the claim rate is packs claimed against packs supplied.</div>
+    ${batch.length?`<h2>Lots claimed more than once</h2>
+      <table class="tight">
+        <colgroup><col style="width:17%"><col style="width:9%"><col style="width:9%"><col style="width:33%"><col style="width:32%"></colgroup>
+        <thead><tr><th>Lot</th><th class="n">Claims</th><th class="n">Packs</th><th>Sites</th><th>Faults seen</th></tr></thead>
+        <tbody>${batch.map(l=>`<tr><td>${esc(l.lot)}</td><td class="n">${l.n}</td><td class="n">${fmtN(l.qty,0)}</td>
+          <td>${esc([...l.sites].join(', ')||'not recorded')}</td><td>${esc([...l.faults].join(', '))}</td></tr>`).join('')}
+        </tbody></table>
+      <div class="cap">A lot claimed at more than one site is a batch question for Ziemer AG rather than a single bad pack.</div>`:''}
+    <h2>Every claim in the period</h2>
+    <table class="tight">
+      <colgroup><col style="width:11%"><col style="width:9%"><col style="width:17%"><col style="width:11%"><col style="width:6%">
+        <col style="width:15%"><col style="width:13%"><col style="width:12%"><col style="width:6%"></colgroup>
+      <thead><tr><th>Claim</th><th>Reported</th><th>Customer</th><th>Lot</th><th class="n">Packs</th>
+        <th>Fault</th><th>Status</th><th>Compensation</th><th class="n">Days</th></tr></thead>
+      <tbody>${C.length?C.map(c=>`<tr><td>${esc(c.claimNo||'—')}</td><td>${esc(c.date||'')}</td>
+        <td>${esc(c.accountName||c.site||'')}</td><td>${esc(c.lot||'—')}</td><td class="n">${fmtN(c.qty,0)}</td>
+        <td>${esc(c.fault||'')}</td><td>${esc(c.status||'Draft')}</td>
+        <td>${esc(c.compensation||'—')}</td><td class="n">${c.days==null?'—':c.days}</td></tr>`).join('')
+        :'<tr><td colspan="9">No claims fall in this period.</td></tr>'}
+      </tbody></table>
+    ${open.length?`<h2>Open claims to chase</h2>
+      <table class="tight">
+        <colgroup><col style="width:12%"><col style="width:24%"><col style="width:14%"><col style="width:18%"><col style="width:18%"><col style="width:14%"></colgroup>
+        <thead><tr><th>Claim</th><th>Customer</th><th>Lot</th><th>Status</th><th>Handled by</th><th class="n">Days open</th></tr></thead>
+        <tbody>${open.sort((a,b)=>(b.days||0)-(a.days||0)).map(c=>`<tr><td>${esc(c.claimNo||'—')}</td>
+          <td>${esc(c.accountName||c.site||'')}</td><td>${esc(c.lot||'—')}</td><td>${esc(c.status||'Draft')}</td>
+          <td>${esc(c.handler||'—')}</td><td class="n">${c.days==null?'—':c.days}</td></tr>`).join('')}
+        </tbody></table>`:''}
+    ${claimFoot(`Product claims ${from} to ${to}`)}`;
+}
+function pageClaims(){
+  const C=(DB.claims||[]).map(CFG.claim.compute);
+  const from=(ui2.clmFrom||dISO(addMonths(new Date(),-12))), to=(ui2.clmTo||dISO(new Date()));
+  const inRange=C.filter(c=>(c.date||'')>=from&&(c.date||'')<=to);
+  const open=C.filter(c=>c.open), year=String(new Date().getFullYear());
+  const yr=C.filter(c=>c.year===year);
+  const settled=C.filter(c=>!c.open&&c.days!=null);
+  const avg=settled.length?settled.reduce((s,c)=>s+c.days,0)/settled.length:null;
+  const won=C.filter(c=>/^(Approved|Partly approved|Replacement sent|Closed)$/.test(c.status||'')).length;
+  /* one lot failing at two hospitals is a batch question, not a bad pack */
+  const lots={};
+  C.forEach(c=>{ if(!c.lot) return; const k=norm(c.lot);
+    const L=lots[k]=lots[k]||{lot:c.lot,n:0,qty:0,sites:new Set()};
+    L.n++; L.qty+=(+c.qty||0); if(c.site) L.sites.add(c.site); });
+  const bad=Object.values(lots).filter(l=>l.sites.size>1||l.n>2).sort((a,b)=>b.n-a.n);
+  const stale=open.filter(c=>(c.days||0)>30);
+  return `${C.length?`<div class="grid kpis">
+      ${kpi('Claims in '+year,yr.length,`${fmtN(yr.reduce((s,c)=>s+(+c.qty||0),0),0)} packs · ${fmtMs(yr.reduce((s,c)=>s+(+c.value||0),0))} at list`,'')}
+      ${kpi('Still open',open.length,open.length?`oldest ${Math.max(...open.map(c=>c.days||0))} days`:'nothing outstanding','n5')}
+      ${kpi('Turnaround',avg==null?'—':fmtN(avg,0)+' days',`average across ${settled.length} settled claim${settled.length===1?'':'s'}`,'n2')}
+      ${kpi('Settled in our favour',won,`${C.filter(c=>c.status==='Rejected').length} rejected · ${C.filter(c=>c.status==='Draft').length} still a draft`,'n6')}
+    </div>`:''}
+  ${stale.length?`<div class="note amber"><b>${stale.length} claim${stale.length===1?'':'s'} ${stale.length===1?'has':'have'} been open over a month.</b>
+      ${stale.slice(0,5).map(c=>`<div class="stat-row"><span><span class="mono">${esc(c.claimNo||'—')}</span> · ${esc(c.accountName||c.site||'')}</span>
+        <span>${c.days} days · ${esc(c.status||'Draft')}</span></div>`).join('')}
+    </div>`:''}
+  ${bad.length?`<div class="note amber"><b>${bad.length} lot${bad.length===1?'':'s'} claimed more than once.</b>
+      A lot that fails at more than one hospital is a batch question for Ziemer AG rather than a single bad pack.
+      ${bad.slice(0,6).map(l=>`<div class="stat-row"><span class="mono">${esc(l.lot)}</span>
+        <span>${l.n} claim${l.n===1?'':'s'} · ${fmtN(l.qty,0)} pack${l.qty===1?'':'s'} · ${[...l.sites].join(', ')||'site not recorded'}</span></div>`).join('')}
+    </div>`:''}
+  ${C.length?`<h4 class="sec">Paperwork</h4>
+  <div class="card"><div class="body">
+    <div class="toolbar" style="margin:0">
+      <span class="mini">From</span><input class="f" type="date" id="clmFrom" value="${esc(from)}">
+      <span class="mini">to</span><input class="f" type="date" id="clmTo" value="${esc(to)}">
+      <span class="mono mini">${inRange.length} claim${inRange.length===1?'':'s'}</span>
+      <span class="spacer"></span>
+      <button class="btn sm" id="clmList" ${inRange.length?'':'disabled'}>Claim list</button>
+      <button class="btn sm pri" id="clmReport" ${inRange.length?'':'disabled'}>Summary report</button></div>
+    <div class="mini" style="margin-top:10px"><b>Claim list</b> prints every claim in the period in full, grouped by customer —
+      the sheet to work through with a hospital. <b>Summary report</b> rolls them up by status, fault, customer and lot,
+      with the claim rate against what each customer bought — the sheet for a quarterly review with Ziemer AG.
+      Both open ready to print; choose <b>Save as PDF</b> in the print dialog to send one on.
+      For a single claim, open its row and press <b>Print the claim</b>.</div>
+  </div></div>`:''}
+  ${tableCard(CFG.claim)}`;
+}
 function pageVisits(){
   const V=DB.visits.map(CFG.visit.compute);
   const from=(ui2.svcFrom||dISO(addMonths(new Date(),-3))), to=(ui2.svcTo||dISO(new Date()));
@@ -6582,6 +6996,8 @@ function pageData(){
   <div class="brand-foot" style="border-top:1px solid var(--line)">
     <img src="data:image/png;base64,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" alt="Ziemer Ophthalmology">
     <span class="mini">Ziemer Ophthalmic Systems · Thailand commercial data · ${DB.installedBase.length+DB.procedurePack.length+DB.serviceContract.length+DB.pipeline.length+DB.lasikCenters.length+DB.priceList.length} records under management<br>Build ${BUILD}</span>
+    <button class="btn sm" id="verCheck" style="margin-left:auto"
+      title="Asks the published address what build it is serving now">Check for a newer version</button>
   </div></div>`;
 }
 
@@ -6611,7 +7027,7 @@ function render(){
     el.innerHTML = page==='planner'?pagePlanner():page==='visit'?pageVisits():page==='usage'?pageUsage():page==='users'?pageUsers():page==='io'?pageIO():page==='packan'?pagePackAnalytics():page==='orders'?pageOrders():page==='svc'?pageContracts()
       :page==='pm'?pagePM():page==='machine'?pageMachine():page==='catalog'?pageCatalog():page==='dash'?pageDash()
       :page==='analytics'?pageAnalytics():page==='c360'?pageAccounts()
-      :page==='surg'?pageSurgeons():page==='pipe'?pagePipe():page==='market'?pageMarket():page==='price'?pagePrice():page==='data'?pageData()
+      :page==='surg'?pageSurgeons():page==='claim'?pageClaims():page==='pipe'?pagePipe():page==='market'?pageMarket():page==='price'?pagePrice():page==='data'?pageData()
       :tableCard(CFG[page])+(page==='base'?ageLegend():'');
   }catch(err){ console.error(err);
     el.innerHTML=`<div class="note amber"><b>This page could not be drawn.</b> ${esc(err&&err.message||String(err))}
@@ -6786,7 +7202,7 @@ function narrowFollowers(ov){
     if(keep&&!list.some(o=>String(o.v)===String(keep))) sel.value='';
     const note=sel.parentElement.querySelector('.followhint');
     if(note) note.textContent=acct
-      ? (mine.length?`${mine.length} site${mine.length===1?'':'s'} belong to this account`
+      ? (mine.length?`${mine.length} site${mine.length===1?' belongs':'s belong'} to this account`
          :'This account has no sites recorded — showing every site')
       : 'Choose an account and this list narrows to its sites';
   });
@@ -6906,7 +7322,7 @@ function fieldHTML(f,rec){
         : 'Nothing attached yet.'}
         <div style="margin-top:8px"><button type="button" class="btn sm" data-adddoc="${esc(kind)}|${esc(rec.id)}">+ Attach a document</button></div></div></div>`;
   }
-  else if(f.in==='head') return `<div class="fld wide fhead"><b>${esc(f.label)}</b>${f.hint?`<span class="hint">${f.hint}</span>`:''}</div>`;
+  else if(f.in==='head') return `<div class="fld wide fhead" ${f.when?`data-when="${f.when}"`:''}><b>${esc(f.label)}</b>${f.hint?`<span class="hint">${f.hint}</span>`:''}</div>`;
   else if(f.in==='docfile'){
     return `<div class="fld wide"><label>${f.label}</label>
       <div class="docfile">
@@ -7008,6 +7424,11 @@ function livePreview(cfgKey,o){
         if(st==='On hold') return `<b style="color:var(--amber)">On hold</b> · carried at half its progress until it moves again`;
         return `Progress <b>${fmtP(pr)}</b> · weighted value <b>${fmtM(offer*pr)}</b>${t.lines.length?` · weighted gross profit <b>${fmtM((exVat(offer)-t.cost)*pr)}</b>`:''}`; })()}
       · consumables <b>${fmtMs((+o.estPacks||0)*A().rppIncl)}/yr</b>`; }
+  if(cfgKey==='claim'){ const it=catItem(o.code)||{};
+    const v=(+o.value||0)||((+it.listIncl||0)/10*(+o.qty||0));
+    const lot=o.lot?(DB.claims||[]).filter(c=>c.id!==o.id&&c.lot&&norm(c.lot)===norm(o.lot)).length:0;
+    return `${fmtN(o.qty||0,0)} pack${(+o.qty||0)===1?'':'s'} · <b>${fmtMs(v)}</b>${
+      lot?` · <b style="color:var(--amber)">this lot has been claimed ${lot} time${lot===1?'':'s'} before</b>`:''}`; }
   if(cfgKey==='market'){ return `${o.femto?`Femto brand <b>${esc(brandOf((o.femto||'').split(',')[0])||'—')}</b>`:'No femtosecond system recorded'}${/ziemer/i.test(o.femto||'')?' · <b style="color:var(--teal)">Ziemer site</b>':''}`; }
   return '';
 }
@@ -7740,6 +8161,66 @@ function openForm(cfgKey,id,preset){
   /* narrow the followers once when the form opens, and again whenever the field
      they follow is changed */
   narrowFollowers(ov);
+  if(cfgKey==='claim'){
+    const no=ov.querySelector('[data-fk="claimNo"]'); if(no&&!no.value) no.value=nextClaimNo();
+    const dt=ov.querySelector('[data-fk="date"]');    if(dt&&!dt.value) dt.value=dISO(new Date());
+    const st=ov.querySelector('[data-fk="status"]'), cp=ov.querySelector('[data-fk="compensation"]');
+    /* the paperwork appears as the claim moves along, so a draft stays short */
+    const tog=()=>{ const v=st.value||'Draft', i=CLAIM_STATUS.indexOf(v), on=new Set();
+      if(i>=1) on.add('sent');
+      if(i>=3) on.add('decided');
+      if(v==='Rejected') on.add('rejected');
+      if(i>=3&&v!=='Rejected'){ const c=cp?cp.value:'';
+        on.add('good');
+        if(/credit/i.test(c)&&!/both/i.test(c)) on.add('credit');
+        else if(/replacement/i.test(c)&&!/both/i.test(c)) on.add('replace');
+        else { on.add('credit'); on.add('replace'); } }
+      ov.querySelectorAll('.fld[data-when]').forEach(el=>{
+        const want=el.dataset.when.split('|');
+        /* good|replace means: only once the claim is settled AND a replacement is due */
+        el.style.display=want.every(w=>on.has(w))?'':'none'; });
+      const sd=ov.querySelector('[data-fk="sentDate"]'); if(sd&&i>=1&&!sd.value) sd.value=dISO(new Date());
+      const ad=ov.querySelector('[data-fk="approvedDate"]'); if(ad&&i>=3&&!ad.value) ad.value=dISO(new Date());
+      refresh(); };
+    st.addEventListener('change',tog); cp&&cp.addEventListener('change',tog); tog();
+    /* the machine list narrows to the units standing at the site that reported it */
+    const acc=ov.querySelector('[data-fk="accountId"]'), site=ov.querySelector('[data-fk="locationId"]'),
+          ser=ov.querySelector('[data-fk="serial"]'), who=ov.querySelector('[data-fk="reportedBy"]');
+    const hintOf=el=>el&&el.closest('.fld')?el.closest('.fld').querySelector('.hint'):null;
+    const serHint=hintOf(ser), whoHint=hintOf(who);
+    const narrowSer=()=>{ if(!ser) return; const keep=ser.value;
+      const mine=DB.installedBase.filter(m=>site&&site.value?m.locationId===site.value
+        :acc&&acc.value?(locById(m.locationId)||{}).accountId===acc.value:false);
+      const scoped=!!((site&&site.value)||(acc&&acc.value));
+      /* a serial already on the record stays selectable even if it has since moved */
+      const show=scoped?(keep&&!mine.some(m=>m.serial===keep)
+        ? [...mine,...DB.installedBase.filter(m=>m.serial===keep)] : mine) : DB.installedBase;
+      ser.innerHTML='<option value=""></option>'+show.map(m=>
+        `<option value="${esc(m.serial)}" ${m.serial===keep?'selected':''}>${esc(m.serial+' · '+(m.model||''))}</option>`).join('');
+      if(serHint) serHint.textContent=!scoped?'Choose the account first and this narrows to its machines'
+        :mine.length?`${mine.length} machine${mine.length===1?'':'s'} at ${site&&site.value?'this site':'this account'}`
+        :'No machine is recorded there — leave it blank if the pack never reached one'; };
+    /* the reporter is someone recorded at that account, or working at that site */
+    const narrowWho=()=>{ if(!who) return; const keep=who.value;
+      const names=contactNames(acc?acc.value:'',site?site.value:'');
+      const all=keep&&!names.includes(keep)?[keep,...names]:names;
+      who.innerHTML='<option value=""></option>'+all.map(n=>
+        `<option ${n===keep?'selected':''}>${esc(n)}</option>`).join('');
+      if(whoHint) whoHint.textContent=names.length
+        ? `${names.length} ${names.length===1?'person is':'people are'} recorded there`
+        : 'Nobody is recorded there yet — add them on the Contacts page first'; };
+    /* and the other way round: a machine chosen first says where it stands */
+    const fromSer=()=>{ if(!ser||!ser.value) return;
+      const m=DB.installedBase.find(x=>x.serial===ser.value); if(!m||!m.locationId) return;
+      const l=locById(m.locationId)||{}; let moved=false;
+      if(acc&&!acc.value&&l.accountId){ acc.value=l.accountId; moved=true; }
+      if(site&&!site.value){ narrowFollowers(ov); site.value=m.locationId; moved=true; }
+      if(moved){ narrowWho(); refresh(); } };
+    acc&&acc.addEventListener('change',()=>setTimeout(()=>{narrowSer();narrowWho();},0));
+    site&&site.addEventListener('change',()=>{narrowSer();narrowWho();});
+    ser&&ser.addEventListener('change',fromSer);
+    narrowSer(); narrowWho();
+  }
   if(cfgKey==='surg'){
     const pt=ov.querySelector('[data-fk="pattern"]');
     const tog=()=>ov.querySelectorAll('.fld[data-when]').forEach(el=>{
@@ -7836,6 +8317,7 @@ function openForm(cfgKey,id,preset){
       if(!out.url&&!out.data&&!out.path){ toast('Give it a link, or choose a file'); return; }
       out.kind=out.kind||rec.kind; out.refId=out.refId||rec.refId;
     }
+    if(cfgKey==='claim'&&!String(out.claimNo||'').trim()) out.claimNo=nextClaimNo();
     if(cfgKey==='plan'&&!out.createdOn) out.createdOn=rec.createdOn||dISO(new Date());
     if(cfgKey==='plan'&&out.pmSlot){
       const slot=(DB.pmPlan||[]).find(s=>s.id===out.pmSlot);
@@ -7843,7 +8325,7 @@ function openForm(cfgKey,id,preset){
       if(slot&&out.engineer) slot.plannedEngineer=asList(out.engineer)[0]||'';
     }
     delete out.__dockind;
-    ['contact','buyer','caseSurgeon'].forEach(k=>{ if(typeof out[k]==='string'&&out[k].includes(' · ')) out[k]=out[k].split(' · ')[0]; });
+    ['contact','buyer','caseSurgeon','reportedBy','handler'].forEach(k=>{ if(typeof out[k]==='string'&&out[k].includes(' · ')) out[k]=out[k].split(' · ')[0]; });
     if(cfgKey==='contact'&&id&&rec.name&&out.name&&rec.name!==out.name) renameContact(rec.name,out.name);
     if(cfgKey==='pipe'){ out.cfgLines=cfgLines.filter(l=>l.code&&(+l.qty||0)>0)
         .map(l=>({id:l.id,code:l.code,qty:+l.qty||1,unitIncl:+l.unitIncl||0}));
@@ -7907,10 +8389,10 @@ function toCSV(key){
 const TABLE_LABELS={accounts:'Accounts',docs:'Documents',contacts:'Contacts',usage:'Machine usage',plans:'Visit plans',duties:'Duty roster',locations:'Locations',priceList:'Price list',engineers:'Engineers',
   installedBase:'Installed base',procedurePack:'Pack agreements',packOrders:'Pack orders',
   serviceContract:'Service contracts',pmPlan:'PM schedule',visits:'Service visits',pipeline:'Pipeline',
-  lasikCenters:'LASIK centres',pricingInputs:'Volume inputs',tierModel1:'Tier model #1',tierModel2:'Tier model #2',orSchedule:'Surgeon schedules',moves:'Machine moves'};
+  lasikCenters:'LASIK centres',pricingInputs:'Volume inputs',tierModel1:'Tier model #1',tierModel2:'Tier model #2',orSchedule:'Surgeon schedules',moves:'Machine moves',claims:'Product claims'};
 const TABLE_KEYS={accounts:'name',docs:'id',contacts:'name',usage:'id',plans:'id',duties:'weekStart',locations:'name',priceList:'code',engineers:'name',installedBase:'serial',
   packOrders:'id',procedurePack:'id',serviceContract:'id',pmPlan:'id',visits:'id',pipeline:'customer',
-  lasikCenters:'hospital',pricingInputs:'customer',tierModel1:'tier',tierModel2:'tier',orSchedule:'id',moves:'id'};
+  lasikCenters:'hospital',pricingInputs:'customer',tierModel1:'tier',tierModel2:'tier',orSchedule:'id',moves:'id',claims:'id'};
 function parseCSV(text){
   const rows=[]; let row=[], cell='', q=false;
   text=String(text).replace(/^\uFEFF/,'').replace(/\r\n/g,'\n').replace(/\r/g,'\n');
@@ -8221,6 +8703,17 @@ document.addEventListener('click',e=>{
       printSheet(visitSheet(v),'Service report · '+reportNo(v),
         `${v.date||''} Ziemer service report ${v.serial||''} ${l.name||''} ${reportNo(v)}`); }
     return; }
+  if(e.target.id==='verCheck'){ versionProbe(e.target); return; }
+  if(e.target.id==='clmList'||e.target.id==='clmReport'){
+    const from=ui2.clmFrom||dISO(addMonths(new Date(),-12)), to=ui2.clmTo||dISO(new Date());
+    const roll=e.target.id==='clmReport';
+    printSheet(roll?claimReport(from,to):claimList(from,to),
+      roll?'Product claim report':'Product claim list',
+      `${from} to ${to} Ziemer product claim ${roll?'report':'list'}`); return; }
+  const cfm=e.target.closest('[data-claimform]');
+  if(cfm){ const r=(DB.claims||[]).find(x=>x.id===cfm.dataset.claimform); if(!r) return;
+    printSheet(claimForm(r),`Claim ${r.claimNo||''}`,
+      `${r.claimNo||'claim'} ${(accById(r.accountId)||{}).name||''} procedure pack claim`); return; }
   if(e.target.id==='svcReport'){
     const from=ui2.svcFrom||dISO(addMonths(new Date(),-3)), to=ui2.svcTo||dISO(new Date());
     printSheet(serviceReport(DB.visits.filter(v=>v.date>=from&&v.date<=to),from,to),
@@ -8596,7 +9089,8 @@ document.addEventListener('input',e=>{
   if(e.target.id==='usageAcct'){ ui2.usageAcct=e.target.value; render(); return; }
   if(e.target.id==='usageFrom'){ ui2.usageFrom=e.target.value; render(); return; }
   if(e.target.id==='usageTo'){ ui2.usageTo=e.target.value; render(); return; }
-  if(e.target.id==='svcFrom'||e.target.id==='svcTo'){
+  if(e.target.id==='svcFrom'||e.target.id==='svcTo'
+   ||e.target.id==='clmFrom'||e.target.id==='clmTo'){
     ui2[e.target.id]=e.target.value; render(); return; }
   if(e.target.id==='pAdj'){ ui.pAdj=+e.target.value; document.getElementById('pOut').textContent=(ui.pAdj*100).toFixed(0)+'%'; refreshScenario(); save(); return; }
   if(e.target.id==='vAdj'){ ui.vAdj=+e.target.value; document.getElementById('vOut').textContent=(ui.vAdj*100).toFixed(0)+'%'; refreshScenario(); save(); return; }
