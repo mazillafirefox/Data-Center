@@ -544,7 +544,7 @@ body.pm-dragging{user-select:none}
 </div>
 
 <script>
-const BUILD='2026-10-16 17:05';
+const BUILD='2026-10-20 21:10';
 /* Boundaries from the Royal Thai Survey Department administrative set
    (ADM1 provinces, ADM2 districts), simplified along shared borders so
    neighbouring shapes meet exactly rather than leaving white slivers.
@@ -632,7 +632,50 @@ const OR_SLOTS=['Morning','Afternoon','All day','Evening'];
 const OR_KINDS=['Surgery · LASIK / CLEAR','Surgery · cataract','Surgery · mixed','Clinic (OPD)'];
 const OR_POLICIES=['Keep the whole day free','Use the half-day without surgery'];
 const OR_DOW=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-const CLAIM_STATUS=['Draft','Sent to Ziemer AG','Under review','Approved','Partly approved','Rejected','Replacement sent','Closed'];
+const CLAIM_STATUS=['Draft','Awaiting approval','Approved','Partly approved','Rejected',
+  'Sent to Ziemer AG','Replacement sent','Closed'];
+const CLAIM_DECIDED=['Approved','Partly approved','Rejected'];
+/* the stages reached only once somebody with the authority has approved it */
+const CLAIM_AFTER_OK=['Approved','Partly approved','Sent to Ziemer AG','Replacement sent','Closed'];
+const claimStage=s=>{ const v=s||'Draft';
+  return {draft:v==='Draft', waiting:v==='Awaiting approval',
+    decided:CLAIM_DECIDED.includes(v)||['Sent to Ziemer AG','Replacement sent','Closed'].includes(v),
+    rejected:v==='Rejected', ok:CLAIM_AFTER_OK.includes(v)}; };
+/* Staff marked as approvers. Their email is what ties the record to a login. */
+const claimApprovers=()=>(DB.engineers||[]).filter(e=>e.name&&e.approves==='Yes'&&e.active!=='No');
+function staffByName(n){
+  /* the value may arrive bare, or carrying the role the picker displays */
+  const s=String(n||'').split(' · ')[0].replace(/\s+[—-].*$/,'').trim();
+  if(!s) return null;
+  return (DB.engineers||[]).find(e=>e.name&&norm(e.name)===norm(s))||null;
+}
+/* May the person at this browser decide this claim?
+   Signed out of a shared database (a local copy) there is nobody to check
+   against, so the app does not pretend to enforce it. An admin can always act,
+   otherwise the login's address must match the approver named on the claim. */
+function claimCanApprove(r){
+  /* Only a workspace with no logins at all is unenforceable. Being offline for
+     a moment is not: the session says who this is, so the rule still holds. */
+  if(!AUTH_REQUIRED()) return true;
+  if(!Auth.on()) return false;
+  if(Auth.role()==='admin') return true;
+  const s=staffByName(r&&r.approver);
+  return !!(s&&s.email&&Auth.email()&&norm(s.email)===norm(Auth.email()));
+}
+function claimApproveWhy(r){
+  if(!AUTH_REQUIRED()) return '';
+  if(!Auth.on()) return 'you are signed out';
+  if(Auth.role()==='admin') return 'you are an admin';
+  const s=staffByName(r&&r.approver);
+  if(!s) return `${r&&r.approver?'“'+r.approver+'” is not on the Staff page':'no approver has been named'}`;
+  if(!s.email) return `${s.name} has no email address on the Staff page, so no login can be matched to them`;
+  return `only ${s.name} (${s.email}) can decide this one`;
+}
+/* Whoever is at the keyboard, as a Staff record where one matches the login. */
+function meAsStaff(){
+  const e=Auth.on()&&Auth.email();
+  return (e&&(DB.engineers||[]).find(s=>s.email&&norm(s.email)===norm(e)))||null;
+}
 const CLAIM_FAULTS=['Vacuum loss / suction failure','Packaging damaged','Sterile barrier broken','Cone or applanation defect','Expired on arrival','Wrong model shipped','Short shipment','Damaged in transit','Device rejected the pack','Other'];
 const CLAIM_IMPACT=['None — spotted before the case','Case delayed','Surgery postponed','Surgery cancelled','Patient or eye affected'];
 const CLAIM_COMP=['Replacement pack','Credit note','Both'];
@@ -1849,9 +1892,9 @@ const VIEWS={
   catalog:{title:'Price List',sub:'Ziemer published price list — the basis for cost, list price and margin',icon:'M4 4h10l6 6v10H4zM14 4v6h6M8 14h8M8 17h5',key:'priceList'},
   surg:{title:'Surgeon Schedules',sub:'When each surgeon operates or holds clinic at each site — the visit plan works around it',icon:'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2zM9 16l2 2 4-4',key:'orSchedule'},
   move:{title:'Machine Moves',sub:'Every time a unit changed site — demo placements, sales, loans and returns',icon:'M5 12h14M12 5l7 7-7 7M3 5v14',key:'moves'},
-  claim:{title:'Product Claims',sub:'Faulty procedure packs — the lot, the decision from Ziemer AG and what the customer got back',
+  claim:{title:'Product Claims',sub:'Faulty procedure packs — raised, approved and settled, with the lot kept on every record',
     icon:'M10.3 3.9L1.8 18a2 2 0 001.7 3h16.9a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01',key:'claims'},
-  engineer:{title:'Engineers',sub:'Field service and application engineers',icon:'M16 21v-2a4 4 0 00-8 0v2M12 11a4 4 0 100-8 4 4 0 000 8M20 8v6M23 11h-6',key:'engineers'},
+  engineer:{title:'Staff',sub:'Everyone at Ziemer Thailand and the partners who work on the fleet — and who may approve a claim',icon:'M16 21v-2a4 4 0 00-8 0v2M12 11a4 4 0 100-8 4 4 0 000 8M20 8v6M23 11h-6',key:'engineers'},
   packan:{title:'Pack Analytics',sub:'Consumable performance — volume, mix, realised price and growth',
     icon:'M3 3v18h18M7 14l3-4 3 3 4-6'},
   orders:{title:'Pack Orders',sub:'What has actually been invoiced — the source for volume and realised price',
@@ -2248,7 +2291,11 @@ function glossaryDialog(){
   ov.onclick=e=>{ if(e.target===ov) close(); };
 }
 const FORM_TITLES={plan:'Planned visit',duty:'Week on duty',pmslot:'PM slot',contact:'Contact',usage:'Machine usage',doc:'Document'};
-const ENGINEER_ROLES=['Field service engineer','Application specialist','Sales','Distributor engineer','Third-party contractor'];
+const ENGINEER_ROLES=['Field service engineer','Application specialist','Service manager',
+  'Sales','Sales manager','Country manager','Office and administration',
+  'Distributor engineer','Third-party contractor'];
+/* roles that attend machines — the visit and round forms offer only these */
+const FIELD_ROLES=/engineer|application|specialist|contractor/i;
 const SALES_ALIAS={
   'บริษัท เอซีอาร์เอส จำกัด':'ACRS CO., LTD.',
   'บริษัท บรรยง การแพทย์ จำกัด':'BANYONG MEDICAL COMPANY LIMITED',
@@ -2673,7 +2720,7 @@ const CFG={
     emptyTitle:'No claims recorded',
     emptyHint:'Press “+ Add record” when a procedure pack arrives faulty or fails on the device. The lot number, the decision from Ziemer AG and the replacement all stay on the one record.',
     filters:[{k:'status',label:'Status'},{k:'accountName',label:'Account'},{k:'fault',label:'Fault'},
-      {k:'year',label:'Year',get:r=>String(r.date||'').slice(0,4)}],
+      {k:'approver',label:'Approver'},{k:'year',label:'Year',get:r=>String(r.date||'').slice(0,4)}],
     sort:(a,b)=>String(b.date||'').localeCompare(String(a.date||''))||String(b.claimNo||'').localeCompare(String(a.claimNo||'')),
     compute:r=>{ const l=locById(r.locationId)||{}, a=accById(r.accountId)||accById(l.accountId)||{};
       const it=catItem(r.code)||{};
@@ -2682,9 +2729,12 @@ const CFG={
       const end=open?'':(r.receivedDate||r.dispatchDate||r.approvedDate||r.sentDate||'');
       const days=r.date?Math.max(0,Math.round(((end?new Date(end):new Date())-new Date(r.date))/864e5)):null;
       const sameLot=r.lot?(DB.claims||[]).filter(c=>c.lot&&norm(c.lot)===norm(r.lot)).length:0;
+      const g=claimStage(r.status);
       return {...r,year:String(r.date||'').slice(0,4),accountName:a.name||'',site:l.name||'',
         item:it.name||'',value:(+r.value||0)||((+it.listIncl||0)/10*(+r.qty||0)),
-        open,days,sameLot}; },
+        open,days,sameLot,
+        waiting:g.waiting, mine:g.waiting&&claimCanApprove(r),
+        wait:r.submittedOn?Math.max(0,Math.round((new Date()-new Date(r.submittedOn))/864e5)):null}; },
     cols:[{k:'claimNo',label:'Claim',r:r=>`<span class="mono">${esc(r.claimNo||'—')}</span>`},
       {k:'date',label:'Reported',r:r=>`<span class="mono">${esc(r.date||'')}</span>`},
       {k:'accountName',label:'Account',w:160,r:r=>r.accountName?esc(r.accountName):'<span class="tag warn">not linked</span>'},
@@ -2704,14 +2754,19 @@ const CFG={
       {k:'days',label:'Age',t:'n',r:r=>r.days==null?'—':r.open
         ?`<span class="tag ${r.days>30?'bad':r.days>14?'warn':'nv'}">${r.days} d open</span>`
         :`<span class="mini">${r.days} d</span>`},
+      {k:'approver',label:'Approval',w:160,tip:'Who the claim was sent to, and who decided it',
+        r:r=>r.approvedBy?`${esc(r.approvedBy)}<div class="mini">decided ${esc(r.approvedDate||'')}</div>`
+          :r.approver?`${esc(r.approver)}${r.waiting?`<div class="mini">waiting ${r.wait==null?'':r.wait+' d'}</div>`:''}`
+          :'<span class="tag warn">nobody named</span>'},
       {k:'compensation',label:'Compensation',r:r=>r.compensation?`<span class="tag tl">${esc(r.compensation)}</span>`:'—'},
       {k:'dispatchDate',label:'Dispatched',r:r=>r.dispatchDate?`<span class="mono">${esc(r.dispatchDate)}</span>`:'—'},
-      {k:'__print',label:'',r:r=>`<button class="btn sm" data-claimform="${esc(r.id)}"
+      {k:'__print',label:'',r:r=>`${r.mine?`<button class="btn sm pri" data-claimdecide="${esc(r.id)}"
+          title="You are the named approver for this claim">Decide</button> `:''}<button class="btn sm" data-claimform="${esc(r.id)}"
         title="Print this one claim, ready to send to Ziemer AG">Print</button>`}],
     total:rows=>`<td colspan="6">${rows.length} claim${rows.length===1?'':'s'}</td>
       <td class="num">${fmtN(sum(rows,'qty'),0)}</td>
       <td class="num">${fmtM(sum(rows,'value'))}</td>
-      <td colspan="7"></td>`,
+      <td colspan="8"></td>`,
     form:[{k:'__ch1',label:'The claim',in:'head',wide:1,hint:'Who reported it, from where, and when'},
       {k:'claimNo',label:'Claim number',hint:'Generated here — Ziemer AG issues no form of its own, so this is the reference everyone quotes'},
       {k:'date',label:'Date reported',in:'date',req:1},
@@ -2726,7 +2781,7 @@ const CFG={
       {k:'handler',label:'Handled by',in:'datalist',
         opts:()=>DB.engineers.filter(e=>e.name&&e.active!=='No')
           .map(e=>e.name+(e.role?' · '+e.role:'')).sort(),
-        hint:'From the Engineers page — whoever at Ziemer Thailand is chasing it'},
+        hint:'From the Staff page — whoever at Ziemer Thailand is chasing it'},
       {k:'serial',label:'Machine',in:'select',
         pairs:()=>DB.installedBase.map(m=>({v:m.serial,l:`${m.serial} · ${m.model||''}`})),
         hint:'The units standing at the site above — picking one here fills the site in if it is still blank'},
@@ -2747,13 +2802,26 @@ const CFG={
       {k:'detail',label:'What happened',in:'textarea',wide:1,
         hint:'Enough for Ziemer AG to judge it without ringing back — the error shown, how far into the case it failed, what the pouch looked like'},
 
-      {k:'__ch4',label:'Ziemer AG',in:'head',wide:1,hint:'Fills in as the claim moves along — the fields appear as the status changes'},
-      {k:'status',label:'Status',in:'select',op:CLAIM_STATUS,def:'Draft',req:1},
-      {k:'sentDate',label:'Sent to Ziemer AG',in:'date',when:'sent'},
-      {k:'approver',label:'Decided by',when:'decided',hint:'The person at Ziemer AG who signed it off'},
+      {k:'__ch4',label:'Approval',in:'head',wide:1,
+        hint:'Raise it as a draft, then send it for approval. Only the person named below can approve or reject it.'},
+      {k:'status',label:'Status',in:'select',op:CLAIM_STATUS,def:'Draft',req:1,
+        hint:'Use the buttons at the foot of this form to move it along — they keep the dates and the names right'},
+      {k:'approver',label:'Approval requested from',in:'select',req:1,
+        pairs:()=>claimApprovers().map(e=>({v:e.name,
+          l:e.name+(e.role?' · '+e.role:'')+(e.email?'':' · no login linked yet')})),
+        hint:'People ticked as approvers on the Staff page. Someone with no email address there cannot be matched to a login, so only an admin could decide it.'},
+      {k:'raisedBy',label:'Raised by',in:'datalist',
+        opts:()=>(DB.engineers||[]).filter(e=>e.name&&e.active!=='No').map(e=>e.name).sort(),
+        hint:'Whoever is making the claim'},
+      {k:'submittedOn',label:'Sent for approval',in:'date',when:'submitted'},
+      {k:'approvedBy',label:'Decided by',when:'decided',derived:1,from:'recorded when the decision is made'},
       {k:'approvedDate',label:'Date decided',in:'date',when:'decided'},
-      {k:'rmaNo',label:'Ziemer AG reference',when:'decided',hint:'The RMA or case number they quote back, if they give one'},
       {k:'rejectReason',label:'Reason given',in:'textarea',wide:1,when:'rejected'},
+
+      {k:'__ch4b',label:'Ziemer AG',in:'head',wide:1,when:'ok',
+        hint:'Only once it is approved internally does the claim go to the factory'},
+      {k:'sentDate',label:'Sent to Ziemer AG',in:'date',when:'ok'},
+      {k:'rmaNo',label:'Ziemer AG reference',when:'ok',hint:'The RMA or case number they quote back, if they give one'},
 
       {k:'__ch5',label:'Compensation',in:'head',wide:1,when:'good',
         hint:'Nothing has to go back to Ziemer AG — this is only what reaches the customer'},
@@ -2774,8 +2842,12 @@ const CFG={
     filters:[{k:'role',label:'Role'},{k:'active',label:'Active'}],
     compute:r=>({...r,visits:DB.visits.filter(v=>asList(v.engineer).some(n=>norm(n)===norm(r.name))).length,
       last:DB.visits.filter(v=>asList(v.engineer).some(n=>norm(n)===norm(r.name))).map(v=>v.date).sort().pop()||''}),
-    cols:[{k:'name',label:'Name',w:200},{k:'role',label:'Role'},{k:'company',label:'Works for',w:180},
+    cols:[{k:'name',label:'Name',w:200},{k:'role',label:'Role',w:150},{k:'company',label:'Works for',w:180},
       {k:'region',label:'Region'},{k:'tel',label:'Phone'},{k:'email',label:'Email',w:180},
+      {k:'approves',label:'Approves claims',r:r=>r.approves==='Yes'
+        ?(r.email?'<span class="tag ok">yes</span>'
+          :'<span class="tag warn" title="Without an email address the app cannot tell which login is theirs">needs an email</span>')
+        :'<span class="tag no">no</span>'},
       {k:'visits',label:'Visits',t:'n',r:r=>r.visits?`<span class="tag tl">${r.visits}</span>`:'<span class="tag no">0</span>'},
       {k:'last',label:'Last visit',r:r=>r.last?`<span class="mono">${esc(r.last)}</span>`:'—'},
       {k:'active',label:'Active',r:r=>tagYN(r.active)}],
@@ -2783,7 +2855,10 @@ const CFG={
       {k:'role',label:'Role',in:'select',op:ENGINEER_ROLES,def:'Field service engineer',req:1},
       {k:'company',label:'Works for',in:'datalist',opts:()=>['Ziemer Ophthalmic Systems',...DB.accounts.map(a=>a.name)]},
       {k:'region',label:'Region covered',in:'datalist',opts:()=>optsFrom('provinces')},
-      {k:'tel',label:'Phone'},{k:'email',label:'Email'},
+      {k:'tel',label:'Phone'},
+      {k:'email',label:'Email',hint:'Must be the address they sign in with — that is how an approval is checked against the person'},
+      {k:'approves',label:'May approve product claims',in:'select',op:YN,def:'No',req:1,
+        hint:'Only these people are offered as the approver on a claim, and only they can approve one'},
       {k:'active',label:'Active',in:'select',op:YN,def:'Yes',req:1}]},
   pmslot:{key:'pmPlan',todayKey:'dueDate',noDelete:1,
     filters:[{k:'state',label:'Status',get:r=>r.state},{k:'serial',label:'Machine'},{k:'plannedEngineer',label:'Engineer'}],
@@ -6244,14 +6319,17 @@ function claimForm(rec){
       <div><span>Effect on the case</span><b>${esc(r.impact||'—')}</b></div>
     </div>
     <div class="box" style="margin-top:7px">${esc(r.detail||'No description recorded.')}</div>
-    <h2>Decision</h2>
+    <h2>Approval</h2>
     <div class="kv">
       <div><span>Status</span><b>${esc(r.status||'Draft')}</b></div>
-      <div><span>Date sent</span><b>${esc(r.sentDate||'—')}</b></div>
-      <div><span>Decided by</span><b>${esc(r.approver||'—')}</b></div>
+      <div><span>Raised by</span><b>${esc(r.raisedBy||r.handler||'—')}</b></div>
+      <div><span>Approval requested from</span><b>${esc(r.approver||'—')}</b></div>
+      <div><span>Sent for approval</span><b>${esc(r.submittedOn||'—')}</b></div>
+      <div><span>Decided by</span><b>${esc(r.approvedBy||'—')}</b></div>
       <div><span>Date decided</span><b>${esc(r.approvedDate||'—')}</b></div>
+      <div><span>Sent to Ziemer AG</span><b>${esc(r.sentDate||'—')}</b></div>
       <div><span>Ziemer AG reference</span><b>${esc(r.rmaNo||'—')}</b></div>
-      <div><span>Days open</span><b>${r.days==null?'—':r.days+(r.open?' and counting':'')}</b></div>
+      <div class="wide"><span>Days open</span><b>${r.days==null?'—':r.days+(r.open?' and counting':'')}</b></div>
     </div>
     ${r.rejectReason?`<div class="box" style="margin-top:7px">${esc(r.rejectReason)}</div>`:''}
     ${comp?`<h2>Compensation</h2>
@@ -6268,8 +6346,8 @@ function claimForm(rec){
       <div class="cap">No faulty goods are returned to Ziemer AG for this claim.</div>`:''}
     ${r.note?`<h2>Notes</h2><div class="box">${esc(r.note)}</div>`:''}
     <div class="sign">
-      <div><div class="line"></div><div class="cap">Ziemer Thailand · ${esc(r.handler||'')}</div></div>
-      <div><div class="line"></div><div class="cap">Ziemer AG · ${esc(r.approver||'')}</div></div>
+      <div><div class="line"></div><div class="cap">Raised by · ${esc(r.raisedBy||r.handler||'')}</div></div>
+      <div><div class="line"></div><div class="cap">Approved by · ${esc(r.approvedBy||r.approver||'')}</div></div>
     </div>
     ${claimFoot(`${r.claimNo||'Claim'} · ${r.accountName||''}`)}`;
 }
@@ -6302,7 +6380,8 @@ function claimList(from,to){
         <tr><th>Fault</th><td>${esc(c.fault||'—')}</td>
             <th>Effect</th><td>${esc(c.impact||'—')}</td>
             <th>Handled by</th><td>${esc(c.handler||'—')}</td></tr>
-        <tr><th>Decided by</th><td>${esc(c.approver||'—')}${c.approvedDate?' · '+esc(c.approvedDate):''}</td>
+        <tr><th>Approval</th><td>${c.approvedBy?`${esc(c.approvedBy)}${c.approvedDate?' · '+esc(c.approvedDate):''}`
+              :c.approver?`requested from ${esc(c.approver)}`:'nobody named'}</td>
             <th>Reference</th><td>${esc(c.rmaNo||'—')}</td>
             <th>Compensation</th><td>${esc(c.compensation||'—')}${c.dispatchDate?` · sent ${esc(c.dispatchDate)}`:''}${c.creditNo?` · ${esc(c.creditNo)}`:''}</td></tr>
         ${c.detail?`<tr><th>What happened</th><td colspan="5">${esc(String(c.detail).replace(/\s+/g,' '))}</td></tr>`:''}
@@ -6364,6 +6443,8 @@ function claimReport(from,to){
     ${tbl('Fault',tally(c=>c.fault))}
     <h2>By effect on the case</h2>
     ${tbl('Effect',tally(c=>c.impact))}
+    <h2>By approver</h2>
+    ${tbl('Approval requested from',tally(c=>c.approver))}
     <h2>By customer</h2>
     <table class="tight">
       <colgroup><col style="width:34%"><col style="width:11%"><col style="width:11%"><col style="width:14%"><col style="width:15%"><col style="width:15%"></colgroup>
@@ -6398,10 +6479,10 @@ function claimReport(from,to){
     ${open.length?`<h2>Open claims to chase</h2>
       <table class="tight">
         <colgroup><col style="width:12%"><col style="width:24%"><col style="width:14%"><col style="width:18%"><col style="width:18%"><col style="width:14%"></colgroup>
-        <thead><tr><th>Claim</th><th>Customer</th><th>Lot</th><th>Status</th><th>Handled by</th><th class="n">Days open</th></tr></thead>
+        <thead><tr><th>Claim</th><th>Customer</th><th>Lot</th><th>Status</th><th>With</th><th class="n">Days open</th></tr></thead>
         <tbody>${open.sort((a,b)=>(b.days||0)-(a.days||0)).map(c=>`<tr><td>${esc(c.claimNo||'—')}</td>
           <td>${esc(c.accountName||c.site||'')}</td><td>${esc(c.lot||'—')}</td><td>${esc(c.status||'Draft')}</td>
-          <td>${esc(c.handler||'—')}</td><td class="n">${c.days==null?'—':c.days}</td></tr>`).join('')}
+          <td>${esc(c.waiting?(c.approver||'nobody named'):(c.handler||'—'))}</td><td class="n">${c.days==null?'—':c.days}</td></tr>`).join('')}
         </tbody></table>`:''}
     ${claimFoot(`Product claims ${from} to ${to}`)}`;
 }
@@ -6421,12 +6502,25 @@ function pageClaims(){
     L.n++; L.qty+=(+c.qty||0); if(c.site) L.sites.add(c.site); });
   const bad=Object.values(lots).filter(l=>l.sites.size>1||l.n>2).sort((a,b)=>b.n-a.n);
   const stale=open.filter(c=>(c.days||0)>30);
-  return `${C.length?`<div class="grid kpis">
+  const waiting=C.filter(c=>c.waiting), mine=waiting.filter(c=>c.mine);
+  const noApprover=C.filter(c=>!c.approver&&c.open);
+  return `${mine.length?`<div class="note amber"><b>${mine.length} claim${mine.length===1?'':'s'} ${mine.length===1?'is':'are'} waiting for you to decide.</b>
+      ${mine.sort((a,b)=>(b.wait||0)-(a.wait||0)).map(c=>`<div class="stat-row">
+        <span><span class="mono">${esc(c.claimNo||'—')}</span> · ${esc(c.accountName||c.site||'')}
+          · ${fmtN(c.qty,0)} pack${(+c.qty||0)===1?'':'s'} · ${esc(c.fault||'')}</span>
+        <span>${c.wait==null?'':c.wait+' days'} <button class="btn sm pri" data-claimdecide="${esc(c.id)}">Decide</button></span>
+      </div>`).join('')}</div>`:''}
+  ${C.length?`<div class="grid kpis">
       ${kpi('Claims in '+year,yr.length,`${fmtN(yr.reduce((s,c)=>s+(+c.qty||0),0),0)} packs · ${fmtMs(yr.reduce((s,c)=>s+(+c.value||0),0))} at list`,'')}
       ${kpi('Still open',open.length,open.length?`oldest ${Math.max(...open.map(c=>c.days||0))} days`:'nothing outstanding','n5')}
       ${kpi('Turnaround',avg==null?'—':fmtN(avg,0)+' days',`average across ${settled.length} settled claim${settled.length===1?'':'s'}`,'n2')}
-      ${kpi('Settled in our favour',won,`${C.filter(c=>c.status==='Rejected').length} rejected · ${C.filter(c=>c.status==='Draft').length} still a draft`,'n6')}
+      ${waiting.length
+        ? kpi('Waiting for approval',waiting.length,
+            `${mine.length?`${mine.length} for you · `:''}longest ${Math.max(...waiting.map(c=>c.wait||0))} days`,'n6')
+        : kpi('Settled in our favour',won,`${C.filter(c=>c.status==='Rejected').length} rejected · ${C.filter(c=>c.status==='Draft').length} still a draft`,'n6')}
     </div>`:''}
+  ${noApprover.length?`<div class="note amber"><b>${noApprover.length} open claim${noApprover.length===1?'':'s'} ${noApprover.length===1?'has':'have'} nobody named to approve ${noApprover.length===1?'it':'them'}.</b>
+      Open the claim and choose an approver, or tick somebody as an approver on the Staff page first.</div>`:''}
   ${stale.length?`<div class="note amber"><b>${stale.length} claim${stale.length===1?'':'s'} ${stale.length===1?'has':'have'} been open over a month.</b>
       ${stale.slice(0,5).map(c=>`<div class="stat-row"><span><span class="mono">${esc(c.claimNo||'—')}</span> · ${esc(c.accountName||c.site||'')}</span>
         <span>${c.days} days · ${esc(c.status||'Draft')}</span></div>`).join('')}
@@ -6761,7 +6855,7 @@ function pageIO(){
   </div></div>`;
 }
 function pageData(){
-  const tables=[['accounts','Accounts'],['locations','Locations'],['priceList','Price list'],['installedBase','Installed base'],['procedurePack','Pack agreements'],['serviceContract','Service contracts'],['engineers','Engineers'],['packOrders','Pack orders'],['visits','Service visits'],['pmPlan','PM schedule'],['pipeline','Pipeline'],['lasikCenters','LASIK centres'],['pricingInputs','Volume inputs']];
+  const tables=[['accounts','Accounts'],['locations','Locations'],['priceList','Price list'],['installedBase','Installed base'],['procedurePack','Pack agreements'],['serviceContract','Service contracts'],['engineers','Staff'],['packOrders','Pack orders'],['visits','Service visits'],['pmPlan','PM schedule'],['pipeline','Pipeline'],['lasikCenters','LASIK centres'],['pricingInputs','Volume inputs']];
   /* Each item counts what is actually missing and names the page to fix it on,
      so the list empties itself as the work gets done instead of standing there
      as a wish list for ever. */
@@ -8165,12 +8259,31 @@ function openForm(cfgKey,id,preset){
     const no=ov.querySelector('[data-fk="claimNo"]'); if(no&&!no.value) no.value=nextClaimNo();
     const dt=ov.querySelector('[data-fk="date"]');    if(dt&&!dt.value) dt.value=dISO(new Date());
     const st=ov.querySelector('[data-fk="status"]'), cp=ov.querySelector('[data-fk="compensation"]');
+    const rb=ov.querySelector('[data-fk="raisedBy"]');
+    if(rb&&!rb.value){ const me=meAsStaff(); if(me) rb.value=me.name; }
+    /* A decision is not something anyone can type in. The three decided states
+       are removed from the list unless this login is the named approver, and
+       the normal way through is the buttons at the foot of the form. */
+    const allStatus=[...st.options].map(o=>o.value);
+    /* Draft and Awaiting approval are open to whoever raised it. A decision
+       belongs to the named approver. The stages past a decision only exist
+       once one has been made, so the approval cannot be stepped over. */
+    const gateStatus=()=>{ const keep=st.value;
+      const mine=claimCanApprove({approver:(ov.querySelector('[data-fk="approver"]')||{}).value});
+      const settled=claimStage(rec.status).decided;
+      const allow=s=>s===rec.status
+        || (CLAIM_DECIDED.includes(s) ? mine
+            : ['Sent to Ziemer AG','Replacement sent','Closed'].includes(s) ? settled
+            : true);
+      st.innerHTML='<option value=""></option>'+allStatus.filter(Boolean).filter(allow)
+        .map(s=>`<option ${s===keep?'selected':''}>${esc(s)}</option>`).join('');
+      if(keep&&!allow(keep)) st.value=rec.status||'Draft'; };
     /* the paperwork appears as the claim moves along, so a draft stays short */
-    const tog=()=>{ const v=st.value||'Draft', i=CLAIM_STATUS.indexOf(v), on=new Set();
-      if(i>=1) on.add('sent');
-      if(i>=3) on.add('decided');
-      if(v==='Rejected') on.add('rejected');
-      if(i>=3&&v!=='Rejected'){ const c=cp?cp.value:'';
+    const tog=()=>{ const v=st.value||'Draft', g=claimStage(v), on=new Set();
+      if(!g.draft) on.add('submitted');
+      if(g.decided) on.add('decided');
+      if(g.rejected) on.add('rejected');
+      if(g.ok){ on.add('ok'); const c=cp?cp.value:'';
         on.add('good');
         if(/credit/i.test(c)&&!/both/i.test(c)) on.add('credit');
         else if(/replacement/i.test(c)&&!/both/i.test(c)) on.add('replace');
@@ -8179,10 +8292,49 @@ function openForm(cfgKey,id,preset){
         const want=el.dataset.when.split('|');
         /* good|replace means: only once the claim is settled AND a replacement is due */
         el.style.display=want.every(w=>on.has(w))?'':'none'; });
-      const sd=ov.querySelector('[data-fk="sentDate"]'); if(sd&&i>=1&&!sd.value) sd.value=dISO(new Date());
-      const ad=ov.querySelector('[data-fk="approvedDate"]'); if(ad&&i>=3&&!ad.value) ad.value=dISO(new Date());
-      refresh(); };
-    st.addEventListener('change',tog); cp&&cp.addEventListener('change',tog); tog();
+      const sub=ov.querySelector('[data-fk="submittedOn"]');
+      if(sub&&!g.draft&&!sub.value) sub.value=dISO(new Date());
+      const ad=ov.querySelector('[data-fk="approvedDate"]');
+      if(ad&&g.decided&&!ad.value) ad.value=dISO(new Date());
+      const ab=ov.querySelector('[data-fk="approvedBy"]');
+      if(ab&&g.decided&&!ab.value){ const me=meAsStaff();
+        ab.value=(me&&me.name)||(Auth.profile&&Auth.profile.name)||Auth.email()||''; }
+      claimActions(); refresh(); };
+    /* the buttons that actually move a claim along, so the dates and the name
+       of whoever decided are never left to be typed in by hand */
+    const claimActions=()=>{
+      let bar=ov.querySelector('#clmBar');
+      if(!bar){ const foot=ov.querySelector('footer'); if(!foot) return;
+        bar=document.createElement('span'); bar.id='clmBar';
+        bar.style.cssText='display:flex;gap:8px;align-items:center;margin-right:auto';
+        foot.insertBefore(bar,foot.firstChild); }
+      const v=st.value||'Draft', g=claimStage(v);
+      const who=(ov.querySelector('[data-fk="approver"]')||{}).value||'';
+      const mine=claimCanApprove({approver:who});
+      const set=(s)=>{ st.value=s; gateStatus(); st.value=s; tog(); };
+      if(g.draft) bar.innerHTML=`<button type="button" class="btn sm pri" id="clmSubmit">Send for approval</button>
+        <span class="hint">${who?`${esc(String(who).split(' · ')[0])} will be asked to approve it`
+          :'Choose who should approve it first'}</span>`;
+      else if(g.waiting) bar.innerHTML=mine
+        ? `<button type="button" class="btn sm pri" id="clmOK">Approve</button>
+           <button type="button" class="btn sm" id="clmPart">Approve in part</button>
+           <button type="button" class="btn sm" id="clmNo">Reject</button>`
+        : `<span class="hint">Waiting for approval · ${esc(claimApproveWhy({approver:who}))}</span>`;
+      else bar.innerHTML=`<span class="hint">${esc(v)}${
+        (ov.querySelector('[data-fk="approvedBy"]')||{}).value
+          ? ' · by '+esc((ov.querySelector('[data-fk="approvedBy"]')||{}).value):''}</span>`;
+      const on=(id,fn)=>{ const b=ov.querySelector('#'+id); b&&(b.onclick=fn); };
+      on('clmSubmit',()=>{ if(!who){ toast('Choose who should approve it first'); return; }
+        set('Awaiting approval'); toast('Sent for approval'); });
+      on('clmOK',()=>set('Approved'));
+      on('clmPart',()=>set('Partly approved'));
+      on('clmNo',()=>{ set('Rejected');
+        ov.querySelector('[data-fk="rejectReason"]')?.focus(); });
+    };
+    const apSel=ov.querySelector('[data-fk="approver"]');
+    apSel&&apSel.addEventListener('change',()=>{ gateStatus(); tog(); });
+    st.addEventListener('change',tog); cp&&cp.addEventListener('change',tog);
+    gateStatus(); tog();
     /* the machine list narrows to the units standing at the site that reported it */
     const acc=ov.querySelector('[data-fk="accountId"]'), site=ov.querySelector('[data-fk="locationId"]'),
           ser=ov.querySelector('[data-fk="serial"]'), who=ov.querySelector('[data-fk="reportedBy"]');
@@ -8201,11 +8353,13 @@ function openForm(cfgKey,id,preset){
         :mine.length?`${mine.length} machine${mine.length===1?'':'s'} at ${site&&site.value?'this site':'this account'}`
         :'No machine is recorded there — leave it blank if the pack never reached one'; };
     /* the reporter is someone recorded at that account, or working at that site */
+    const bare=s=>String(s||'').split(' · ')[0].replace(/\s+[—-].*$/,'').trim();
     const narrowWho=()=>{ if(!who) return; const keep=who.value;
       const names=contactNames(acc?acc.value:'',site?site.value:'');
-      const all=keep&&!names.includes(keep)?[keep,...names]:names;
+      const k=bare(keep), hit=k?names.find(n=>norm(bare(n))===norm(k)):'';
+      const all=(!k||hit)?names:[keep,...names];
       who.innerHTML='<option value=""></option>'+all.map(n=>
-        `<option ${n===keep?'selected':''}>${esc(n)}</option>`).join('');
+        `<option ${n===(hit||keep)?'selected':''}>${esc(n)}</option>`).join('');
       if(whoHint) whoHint.textContent=names.length
         ? `${names.length} ${names.length===1?'person is':'people are'} recorded there`
         : 'Nobody is recorded there yet — add them on the Contacts page first'; };
@@ -8317,7 +8471,26 @@ function openForm(cfgKey,id,preset){
       if(!out.url&&!out.data&&!out.path){ toast('Give it a link, or choose a file'); return; }
       out.kind=out.kind||rec.kind; out.refId=out.refId||rec.refId;
     }
-    if(cfgKey==='claim'&&!String(out.claimNo||'').trim()) out.claimNo=nextClaimNo();
+    if(cfgKey==='claim'){
+      if(!String(out.claimNo||'').trim()) out.claimNo=nextClaimNo();
+      const was=rec.status||'Draft', now=out.status||'Draft';
+      /* the form hides the decided states from anyone who may not set them; this
+         catches the rest — a stale form, a pasted import, a changed approver */
+      if(now!==was&&CLAIM_DECIDED.includes(now)&&!claimCanApprove(out)){
+        toast(`You cannot decide this claim — ${claimApproveWhy(out)}`); return; }
+      if(now!==was&&['Sent to Ziemer AG','Replacement sent','Closed'].includes(now)
+        &&!claimStage(was).decided){
+        toast('This claim has to be approved before it can go any further'); return; }
+      if(now!=='Draft'&&!out.submittedOn) out.submittedOn=dISO(new Date());
+      if(claimStage(now).decided){
+        if(!out.approvedDate) out.approvedDate=dISO(new Date());
+        if(!out.approvedBy){ const me=meAsStaff();
+          out.approvedBy=(me&&me.name)||(Auth.profile&&Auth.profile.name)||Auth.email()||''; }
+        if(Auth.on()&&!out.decidedEmail) out.decidedEmail=Auth.email()||'';
+      } else { out.approvedBy=''; out.approvedDate=''; out.decidedEmail=''; }
+      if(now==='Draft'){ out.submittedOn=''; }
+      if(now!=='Rejected') out.rejectReason='';
+    }
     if(cfgKey==='plan'&&!out.createdOn) out.createdOn=rec.createdOn||dISO(new Date());
     if(cfgKey==='plan'&&out.pmSlot){
       const slot=(DB.pmPlan||[]).find(s=>s.id===out.pmSlot);
@@ -8325,7 +8498,7 @@ function openForm(cfgKey,id,preset){
       if(slot&&out.engineer) slot.plannedEngineer=asList(out.engineer)[0]||'';
     }
     delete out.__dockind;
-    ['contact','buyer','caseSurgeon','reportedBy','handler'].forEach(k=>{ if(typeof out[k]==='string'&&out[k].includes(' · ')) out[k]=out[k].split(' · ')[0]; });
+    ['contact','buyer','caseSurgeon','reportedBy','handler','approver','raisedBy'].forEach(k=>{ if(typeof out[k]==='string'&&out[k].includes(' · ')) out[k]=out[k].split(' · ')[0]; });
     if(cfgKey==='contact'&&id&&rec.name&&out.name&&rec.name!==out.name) renameContact(rec.name,out.name);
     if(cfgKey==='pipe'){ out.cfgLines=cfgLines.filter(l=>l.code&&(+l.qty||0)>0)
         .map(l=>({id:l.id,code:l.code,qty:+l.qty||1,unitIncl:+l.unitIncl||0}));
@@ -8386,7 +8559,7 @@ function toCSV(key){
     return /[",\n]/.test(v)?'"'+String(v).replace(/"/g,'""')+'"':v;}).join(','))].join('\n');
   dl(new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}),key+'.csv'); toast('CSV downloaded');
 }
-const TABLE_LABELS={accounts:'Accounts',docs:'Documents',contacts:'Contacts',usage:'Machine usage',plans:'Visit plans',duties:'Duty roster',locations:'Locations',priceList:'Price list',engineers:'Engineers',
+const TABLE_LABELS={accounts:'Accounts',docs:'Documents',contacts:'Contacts',usage:'Machine usage',plans:'Visit plans',duties:'Duty roster',locations:'Locations',priceList:'Price list',engineers:'Staff',
   installedBase:'Installed base',procedurePack:'Pack agreements',packOrders:'Pack orders',
   serviceContract:'Service contracts',pmPlan:'PM schedule',visits:'Service visits',pipeline:'Pipeline',
   lasikCenters:'LASIK centres',pricingInputs:'Volume inputs',tierModel1:'Tier model #1',tierModel2:'Tier model #2',orSchedule:'Surgeon schedules',moves:'Machine moves',claims:'Product claims'};
@@ -8710,6 +8883,10 @@ document.addEventListener('click',e=>{
     printSheet(roll?claimReport(from,to):claimList(from,to),
       roll?'Product claim report':'Product claim list',
       `${from} to ${to} Ziemer product claim ${roll?'report':'list'}`); return; }
+  const cdc=e.target.closest('[data-claimdecide]');
+  if(cdc){ openForm('claim',cdc.dataset.claimdecide);
+    setTimeout(()=>{ const f=document.querySelector('.ov .modal #clmBar'); f&&f.scrollIntoView({block:'nearest'}); },260);
+    return; }
   const cfm=e.target.closest('[data-claimform]');
   if(cfm){ const r=(DB.claims||[]).find(x=>x.id===cfm.dataset.claimform); if(!r) return;
     printSheet(claimForm(r),`Claim ${r.claimNo||''}`,
