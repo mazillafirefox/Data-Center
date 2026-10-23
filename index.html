@@ -544,7 +544,7 @@ body.pm-dragging{user-select:none}
 </div>
 
 <script>
-const BUILD='2026-10-20 21:10';
+const BUILD='2026-10-23 16:40';
 /* Boundaries from the Royal Thai Survey Department administrative set
    (ADM1 provinces, ADM2 districts), simplified along shared borders so
    neighbouring shapes meet exactly rather than leaving white slivers.
@@ -2057,11 +2057,55 @@ function svcDefault(model,pkg){
   if(it) return {costCHF:+it.costCHF||0,revenueIncl:+it.listIncl||0,code:it.code};
   const r=DB.serviceContract.find(c=>c.model===model&&c.package===pkg&&+c.costCHF>0);
   return r?{costCHF:+r.costCHF,revenueIncl:+r.revenueIncl}:null; }
-const ORDER_SCHEMES=[{v:'list',l:'List price'},{v:'net',l:'Discount off list'},{v:'free',l:'Buy X get Y free'}];
+const ORDER_SCHEMES=[{v:'deal',l:'Pack agreement price'},{v:'list',l:'List price'},
+  {v:'net',l:'Discount off list'},{v:'free',l:'Buy X get Y free'}];
 const orderListEx=code=>{ const it=catItem(code); return it?exVat(+it.listIncl||0):0; };
 const PACK_SCHEMES=[{v:'free',l:'Buy X get Y free'},{v:'net',l:'Discount or net price'},
   {v:'tiered',l:'Agreed price, then more off at a volume'}];
 function packBase(r){ return +r.listIncl||A().rppIncl; }
+/* packRecalc writes its results onto the record, so anything that only wants
+   to read a deal works on a copy of it. */
+function packDealCalc(p){
+  const c={...p, lines:(p.lines||[]).map(l=>({...l}))};
+  try{ packRecalc(c); }catch(e){}
+  return c;
+}
+/* Deals are held per machine. The ones that cover an order are the deals on the
+   machines standing at the ship-to site, or anywhere under the account when the
+   order goes to head office. The site's own deals come first. */
+function packDealsFor(accountId,locationId){
+  const mine=m=>{ const l=locById(m.locationId)||{};
+    return locationId ? m.locationId===locationId
+      : accountId ? l.accountId===accountId : false; };
+  const atSite=new Set(DB.installedBase.filter(m=>m.locationId&&m.locationId===locationId).map(m=>m.serial));
+  const serials=new Set(DB.installedBase.filter(mine).map(m=>m.serial));
+  return (DB.procedurePack||[]).filter(p=>serials.has(p.serial))
+    .sort((a,b)=>(atSite.has(b.serial)?1:0)-(atSite.has(a.serial)?1:0))
+    .map(packDealCalc);
+}
+/* The agreed price for one catalogue item under a deal, per box and ex VAT. */
+function dealLineEx(deal,code){
+  const l=((deal&&deal.lines)||[]).find(x=>x.code===code);
+  if(!l) return 0;
+  const incl=(+l.netPrice||0) || (+l.listIncl||0)*(1-(+l.discPct||0)/100);
+  return incl?exVat(incl):0;
+}
+/* The first deal that quotes this item, site deals first. */
+function dealQuote(deals,code){
+  for(const d of (deals||[])){ const ex=dealLineEx(d,code); if(ex) return {ex,deal:d}; }
+  return {ex:0,deal:null};
+}
+/* Which volume step a box count reaches, and how far the next one is. */
+function dealStep(deal,boxes){
+  if(!deal||deal.scheme!=='tiered') return {steps:[],hit:null,next:null,pct:0};
+  const steps=[[+deal.tierQty||0,+deal.tierPct||0],[+deal.tierQty2||0,+deal.tierPct2||0]]
+    .filter(([q,p])=>q>0&&p>0).sort((a,b)=>a[0]-b[0]);
+  const reached=steps.filter(([q])=>boxes>=q);
+  const hit=reached.length?reached[reached.length-1]:null;
+  return {steps,hit,next:steps.find(([q])=>boxes<q)||null,pct:hit?hit[1]:0};
+}
+/* The deal whose volume steps govern an order: the first tiered one. */
+const dealWithSteps=deals=>(deals||[]).find(d=>d.scheme==='tiered'&&dealStep(d,0).steps.length)||null;
 const catItem=code=>DB.priceList.find(p=>p.code===code);
 /* Fits is filled in for spares and consumables; for packs, service contracts and
    hardware the device lives in the item name, so both are read. */
@@ -7837,18 +7881,41 @@ function openForm(cfgKey,id,preset){
       const list=DB.locations.filter(l=>!accSel.value||l.accountId===accSel.value);
       locSel.innerHTML=`<option value="">— head office —</option>`+list.map(l=>
         `<option value="${esc(l.id)}" ${cur===l.id?'selected':''}>${esc(l.name)}</option>`).join(''); };
-    accSel.addEventListener('change',()=>{ fillLoc(); refresh(); });
+    accSel.addEventListener('change',()=>{ fillLoc();
+      if(schemeIs('deal')){ applyDeal(); drawOrd(); } else refresh(); });
+    locSel.addEventListener('change',()=>{ if(schemeIs('deal')){ applyDeal(); drawOrd(); } else refresh(); });
     fillLoc();
     const schSel=ov.querySelector('[data-fk="scheme"]'), discF=ov.querySelector('[data-fk="discountPct"]');
     const toggleSch=()=>ov.querySelectorAll('.fld[data-when]').forEach(el=>{
       el.style.display=el.dataset.when===schSel.value?'':'none'; });
+    /* The agreement the customer trades under, read fresh each time because
+       the account and the ship-to site can both change while the form is open. */
+    let dealStepNow=null;
+    const curDeals=()=>packDealsFor(accSel.value,locSel.value);
+    const paidBoxes=()=>ordLines.filter(l=>!l.free).reduce((s,l)=>s+(+l.qtyEA||0)/10,0);
+    const schemeIs=v=>((ov.querySelector('[data-fk="scheme"]')||{}).value)===v;
+    /* Prices every line from the agreement, with whatever volume step the boxes
+       on this order reach taken off on top. Returns the step so the caller can
+       tell when crossing a threshold has moved the price. */
+    const applyDeal=()=>{
+      const deals=curDeals(), gov=dealWithSteps(deals);
+      const st=dealStep(gov,paidBoxes());
+      ordLines.forEach(l=>{ if(l.free||!l.code) return;
+        const q=dealQuote(deals,l.code); if(!q.ex) return;
+        const want=Math.round(q.ex*(1-st.pct/100)*100)/100;
+        l.unitEx=want;
+        const le=orderListEx(l.code);
+        l.discPct=le?(1-want/le)*100:0; });
+      dealStepNow=st.hit?st.hit.join('@'):'';
+      return st; };
     const applyDiscount=()=>{ const d=+discF.value||0;
       ordLines.forEach(l=>{ if(l.free) return; const le=orderListEx(l.code);
         if(le){ l.unitEx=le*(1-d/100); l.discPct=d; } });
       drawOrd(); };
     schSel.addEventListener('change',()=>{ toggleSch();
-      if(schSel.value==='list'){ ordLines.forEach(l=>{ if(!l.free) l.unitEx=orderListEx(l.code); }); drawOrd(); }
-      else drawOrd(); });
+      if(schSel.value==='list'){ ordLines.forEach(l=>{ if(!l.free) l.unitEx=orderListEx(l.code); }); }
+      else if(schSel.value==='deal') applyDeal();
+      drawOrd(); });
     discF&&discF.addEventListener('input',applyDiscount);
     toggleSch();
     ordGroup=id?(rec.orderRef?DB.packOrders.filter(o=>o.orderRef===rec.orderRef):[rec]):[];
@@ -7872,15 +7939,35 @@ function openForm(cfgKey,id,preset){
         <td class="num">${fmtM(ls.reduce((s,x)=>s+x.cost,0))}</td>
         <td class="num">${gpTag(gp(totEx,ls.reduce((s,x)=>s+x.cost,0)))}</td><td></td></tr>`;
       const note=ov.querySelector('#ordNote'), sch=(ov.querySelector('[data-fk="scheme"]')||{}).value;
-      if(note){ let msg='Quantity is in EA — 10 EA makes one box';
+      if(note){ let msg='Quantity is in EA — 10 EA makes one box', warn=false;
+        if(sch==='deal'){
+          const deals=curDeals(), gov=dealWithSteps(deals), st=dealStep(gov,paidBx);
+          const quoted=ordLines.filter(l=>!l.free&&l.code&&dealQuote(deals,l.code).ex).length;
+          const priced=ordLines.filter(l=>!l.free&&l.code).length;
+          if(!deals.length){ msg='No pack agreement covers this customer, so every line is at list. '
+              +'Record one on the Pack Agreements page, or price this order by hand.'; warn=true; }
+          else {
+            const serials=[...new Set(deals.map(d=>d.serial))].join(', ');
+            msg=`Priced from the agreement on ${serials}`;
+            if(st.steps.length){
+              msg+=st.hit
+                ? ` · ${fmtN(paidBx,1)} paid boxes reaches the ${st.hit[1]}% step at ${fmtN(st.hit[0],0)}`
+                : ` · no volume step yet`;
+              if(st.next) msg+=` · ${fmtN(st.next[0]-paidBx,1)} more boxes earns ${st.next[1]}%`;
+            }
+            if(priced&&quoted<priced){ msg+=` · ${priced-quoted} line${priced-quoted===1?'':'s'} not in the agreement, left at list`; warn=true; }
+          }
+        }
         if(sch==='free'){ const rule=/(\d+)\D+(\d+)/.exec((ov.querySelector('[data-fk="promoRule"]')||{}).value||'');
           if(rule){ const ent=+rule[1]>0?Math.floor(paidBx/+rule[1])*+rule[2]:0;
             msg = freeBx===ent ? `${rule[1]}+${rule[2]} on ${fmtN(paidBx,1)} paid boxes earns ${ent} free — matches`
               : `${rule[1]}+${rule[2]} on ${fmtN(paidBx,1)} paid boxes earns ${ent} free · ${fmtN(freeBx,1)} recorded`; } }
         note.textContent=msg;
-        note.style.color=(sch==='free'&&/·/.test(msg))?'var(--amber)':''; }
+        note.style.color=(warn||(sch==='free'&&/·/.test(msg)))?'var(--amber)':''; }
       refresh(); };
     const drawOrd=()=>{
+      const byDeal=schemeIs('deal');
+      if(byDeal) applyDeal();
       ov.querySelector('#ordWrap').innerHTML=`<div class="lines-wrap"><table class="lines">
         <thead><tr><th>Catalogue item</th><th class="n">List ex VAT</th><th class="n">Disc %</th><th class="n">Price / box ex VAT</th>
         <th class="n">Qty EA</th><th class="n">Boxes</th><th class="n">Free</th><th class="n">Sales ex VAT</th>
@@ -7889,8 +7976,11 @@ function openForm(cfgKey,id,preset){
           return `<tr data-oi="${l.id}">
             <td><select class="searchable" data-ph="Search the price list…" data-ok2="code"><option value=""></option>${o.map(x=>`<option value="${esc(x.v)}" ${l.code===x.v?'selected':''}>${esc(x.l)}</option>`).join('')}</select></td>
             <td class="num d-list">${l.code?fmtM(c.listEx):'—'}</td>
-            <td class="num"><input class="qty" data-ok2="discPct" type="number" step="0.01" value="${l.code?(c.disc*100).toFixed(2):''}"></td>
-            <td class="num"><input class="money" data-ok2="unitEx" value="${l.unitEx===''||l.unitEx==null?'':fmtAcct(c.unitEx)}"></td>
+            <td class="num"><input class="qty" data-ok2="discPct" type="number" step="0.01" ${byDeal?'readonly':''}
+              value="${l.code?(c.disc*100).toFixed(2):''}"></td>
+            <td class="num"><input class="money" data-ok2="unitEx" ${byDeal?'readonly':''}
+              ${byDeal?`title="${esc(dealQuote(curDeals(),l.code).deal?'From the pack agreement — switch the structure above to price it by hand':'No agreed price for this item, so list is used')}"`:''}
+              value="${l.unitEx===''||l.unitEx==null?'':fmtAcct(c.unitEx)}"></td>
             <td class="num"><input class="qty" data-ok2="qtyEA" type="number" min="0" step="10" value="${l.qtyEA===''||l.qtyEA==null?'':c.qtyEA}"></td>
             <td class="num d-bx">${l.qtyEA===''||l.qtyEA==null?'—':fmtN(c.boxes,1)}</td>
             <td class="num"><input type="checkbox" data-ok2="free" ${c.free?'checked':''} style="width:14px;height:14px"></td>
@@ -7915,6 +8005,12 @@ function openForm(cfgKey,id,preset){
       else if(k==='discPct'){ l.discPct=+i.value||0; l.unitEx=le*(1-l.discPct/100);
         tr.querySelector('[data-ok2="unitEx"]').value=fmtAcct(l.unitEx); }
       else l[k]=+i.value||0;
+      /* under the agreement a quantity can cross a volume step, and that moves
+         every price — redraw only when it actually does, so typing is not
+         interrupted on each keystroke */
+      if(k==='qtyEA'&&schemeIs('deal')){
+        const before=dealStepNow; applyDeal();
+        if(dealStepNow!==before){ drawOrd(); return; } }
       updOrd(l.id); });
     ov.addEventListener('change',e=>{
       const cb=e.target.closest('input[type=checkbox][data-ok2]');
@@ -7923,6 +8019,7 @@ function openForm(cfgKey,id,preset){
       const tr=sel.closest('tr'), l=ordLines.find(x=>x.id===tr.dataset.oi), it=catItem(sel.value);
       l.code=sel.value;
       if(it){ l.unitEx=exVat(+it.listIncl||0); if(l.qtyEA===''||l.qtyEA==null) l.qtyEA=10; }
+      if(schemeIs('deal')) applyDeal();
       drawOrd(); });
     ov.addEventListener('click',e=>{
       if(e.target.closest('#addOrdLine')){ ordLines.push(newOrdLine()); drawOrd(); return; }
@@ -8510,7 +8607,15 @@ function openForm(cfgKey,id,preset){
       if(!ls.length){ toast('Add at least one item with a quantity'); return; }
       const promoLabel = out.scheme==='free'
         ? `Buy ${out.promoRule||'X+Y'} free`
-        : out.scheme==='net' ? `${(+out.discountPct||0).toFixed(1)}% off list` : 'List price';
+        : out.scheme==='net' ? `${(+out.discountPct||0).toFixed(1)}% off list`
+        : out.scheme==='deal' ? (()=>{
+            const deals=packDealsFor(out.accountId,out.locationId);
+            const paid=ls.filter(l=>!l.free).reduce((s,l)=>s+l.boxes,0);
+            const st=dealStep(dealWithSteps(deals),paid);
+            return deals.length
+              ? `Pack agreement${st.hit?` \u00b7 ${st.hit[1]}% at ${fmtN(st.hit[0],0)} boxes`:''}`
+              : 'List price'; })()
+        : 'List price';
       const base={scheme:out.scheme||'list', promoRule:out.promoRule||'', discountPct:+out.discountPct||0,
         promotion:promoLabel, period:out.period, accountId:out.accountId, accountName:acc?acc.name:'',
         customer:acc?acc.name:out.customer||'', locationId:out.locationId||'',
