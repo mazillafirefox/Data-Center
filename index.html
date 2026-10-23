@@ -200,6 +200,31 @@ table.lines select{min-width:250px;max-width:300px}
 table.lines tfoot td{background:var(--card-2);font-weight:600;position:static}
 table.lines tr.line-empty td{color:var(--ink-3);text-align:center;padding:14px 8px;font-size:12.5px}
 .line-warn{color:var(--amber);font-size:11.5px;margin-top:6px;display:block}
+.codepick{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.codepane{border:1px solid var(--line-2);border-radius:8px;overflow:hidden;background:var(--card);
+  display:flex;flex-direction:column;min-width:0}
+.codepane.chosen{border-color:var(--teal)}
+.codehead{display:flex;gap:7px;align-items:center;padding:7px 9px;border-bottom:1px solid var(--line);
+  background:var(--card-2);font-size:11.5px}
+.codehead b{white-space:nowrap}
+.codehead .codefind{flex:1;min-width:0;font-size:11.5px;padding:3px 7px}
+.codehead .codecount{margin-right:auto;background:var(--teal);color:#fff;border-radius:20px;
+  padding:1px 8px;font-size:11px;font-variant-numeric:tabular-nums}
+.codelist{height:210px;overflow:auto}
+.codeempty{padding:14px 10px;color:var(--ink-3);font-size:11.5px;text-align:center}
+.coderow{display:grid;grid-template-columns:118px 1fr auto 16px;gap:8px;align-items:center;
+  padding:6px 9px;border-bottom:1px solid var(--line);cursor:pointer;font-size:11.5px}
+.coderow:last-child{border-bottom:none}
+.coderow:hover{background:var(--teal-l)}
+.coderow .cname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.coderow b{font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.coderow .codego{color:var(--teal);font-weight:700;text-align:center}
+.chosen .coderow .codego{color:var(--ink-3)}
+@media(max-width:760px){ .codepick{grid-template-columns:1fr}
+  .codelist{height:170px}
+  .coderow{grid-template-columns:1fr auto 16px}
+  .coderow .mono{grid-column:1;font-size:10.5px;color:var(--ink-3)}
+  .coderow .cname{grid-column:1;grid-row:2} }
 .brand-foot{display:flex;align-items:center;gap:14px;padding:14px 16px}
 .brand-foot img{width:132px;height:auto}
 .fld textarea{min-height:74px;resize:vertical}
@@ -544,7 +569,7 @@ body.pm-dragging{user-select:none}
 </div>
 
 <script>
-const BUILD='2026-10-23 16:40';
+const BUILD='2026-10-23 18:05';
 /* Boundaries from the Royal Thai Survey Department administrative set
    (ADM1 provinces, ADM2 districts), simplified along shared borders so
    neighbouring shapes meet exactly rather than leaving white slivers.
@@ -2063,6 +2088,56 @@ const orderListEx=code=>{ const it=catItem(code); return it?exVat(+it.listIncl||
 const PACK_SCHEMES=[{v:'free',l:'Buy X get Y free'},{v:'net',l:'Discount or net price'},
   {v:'tiered',l:'Agreed price, then more off at a volume'}];
 function packBase(r){ return +r.listIncl||A().rppIncl; }
+const PACK_BASIS=[{v:'pct',l:'A discount off the list price'},
+  {v:'price',l:'An agreed price per box'}];
+/* Which catalogue items the customer may buy under a deal. Older records only
+   listed the items they happened to compose, so those still count. */
+function packEligible(deal){
+  if(!deal) return [];
+  const picked=asList(deal.items).filter(Boolean);
+  if(picked.length) return picked;
+  return [...new Set(((deal.lines)||[]).map(l=>l.code).filter(Boolean))];
+}
+const packCovers=(deal,code)=>!!code&&packEligible(deal).includes(code);
+/* The agreed price per box, inc VAT, for one eligible item:
+   a price negotiated for that item wins, then the deal's own basis. */
+const packBasisOf=d=>d&&d.priceBasis ? d.priceBasis
+  : (d&&!(+d.dealPct)&&+d.sellingIncl ? 'price' : 'pct');
+function packAgreedIncl(deal,code){
+  if(!deal||!packCovers(deal,code)) return 0;
+  const line=((deal.lines)||[]).find(l=>l.code===code);
+  if(line&&+line.netPrice) return +line.netPrice;
+  const it=catItem(code), list=+((it||{}).listIncl)||0;
+  if(packBasisOf(deal)==='price'){
+    const p=+deal.sellingIncl||0;
+    /* a flat agreed price was struck against one list price; on an item that
+       lists for less it would be a premium, so the discount is carried over */
+    if(p&&list&&p>list){ const ref=packRefList(deal);
+      return ref?Math.round(list*(p/ref)*100)/100:list; }
+    return p||list;
+  }
+  const pct=+deal.dealPct||0;
+  return pct?Math.round(list*(1-pct/100)*100)/100:(+deal.sellingIncl||list);
+}
+/* The list price the flat agreed price was struck against. */
+function packRefList(deal){
+  const codes=packEligible(deal).map(c=>+((catItem(c)||{}).listIncl)||0).filter(Boolean);
+  return codes.length?Math.max(...codes):0;
+}
+const packAgreedEx=(deal,code)=>{ const incl=packAgreedIncl(deal,code); return incl?exVat(incl):0; };
+/* One line of plain English for what a deal gives. */
+function packTerms(deal){
+  if(!deal) return '';
+  const n=packEligible(deal).length;
+  const basis=packBasisOf(deal)==='price'
+    ? (+deal.sellingIncl?`${fmtM(deal.sellingIncl)} a box`:'no agreed price set')
+    : (+deal.dealPct?`${fmtN(deal.dealPct,1)}% off list`:'no discount set');
+  const extra=deal.scheme==='free'?` · buy ${deal.promoRule||'X+Y'} free`
+    :deal.scheme==='tiered'?(()=>{ const s=dealStep(deal,0).steps;
+        return s.length?` · then ${s.map(([q,p])=>`${p}% from ${fmtN(q,0)}`).join(', ')}`:''; })()
+    :'';
+  return `${n} item${n===1?'':'s'} · ${basis}${extra}`;
+}
 /* packRecalc writes its results onto the record, so anything that only wants
    to read a deal works on a copy of it. */
 function packDealCalc(p){
@@ -2083,16 +2158,13 @@ function packDealsFor(accountId,locationId){
     .sort((a,b)=>(atSite.has(b.serial)?1:0)-(atSite.has(a.serial)?1:0))
     .map(packDealCalc);
 }
-/* The agreed price for one catalogue item under a deal, per box and ex VAT. */
-function dealLineEx(deal,code){
-  const l=((deal&&deal.lines)||[]).find(x=>x.code===code);
-  if(!l) return 0;
-  const incl=(+l.netPrice||0) || (+l.listIncl||0)*(1-(+l.discPct||0)/100);
-  return incl?exVat(incl):0;
-}
-/* The first deal that quotes this item, site deals first. */
+/* The first deal that covers this item, site deals first. */
 function dealQuote(deals,code){
-  for(const d of (deals||[])){ const ex=dealLineEx(d,code); if(ex) return {ex,deal:d}; }
+  for(const d of (deals||[])){
+    if(!packCovers(d,code)) continue;
+    const ex=packAgreedEx(d,code);
+    if(ex) return {ex,deal:d};
+  }
   return {ex:0,deal:null};
 }
 /* Which volume step a box count reaches, and how far the next one is. */
@@ -3249,14 +3321,20 @@ const CFG={
   pack:{key:'procedurePack',filters:[{k:'model',label:'Model'},{k:'promotion',label:'Deal type'}],
     compute:r=>{ const d=packAgg(r), rex=exVat(d.revenueIncl);
       return {...r,...d, qty:d.boxes, revEx:rex, landed:d.boxes?d.totalCost/d.boxes:0,
-        gpSale:gp(rex,d.totalCost), disc:(d.discountPct||0)/100, effEx:exVat(d.pricePerBx)};},
+        gpSale:gp(rex,d.totalCost), disc:(d.discountPct||0)/100, effEx:exVat(d.pricePerBx),
+        coverCount:packEligible(r).length, terms:packTerms(r)};},
     cols:[{k:'company',label:'Account',w:165},{k:'serial',label:'Serial'},{k:'location',label:'Site',w:150},
       {k:'promotion',label:'Deal type',w:190,r:r=>{ if(!r.promotion) return '—';
         const tag=`<span class="tag ${r.scheme==='free'?'nv':r.scheme==='tiered'?'ok':'tl'}">${esc(r.promotion)}</span>`;
         if(r.scheme!=='tiered') return tag;
         return tag+(r.tierNow?`<div class="mini">now ${fmtM(r.tierPerBx)} a box</div>`:'')
           +(r.tierNext?`<div class="mini">${fmtN(r.tierNext[0]-r.boxes,0)} more boxes → ${r.tierNext[1]}% more off</div>`:''); }},
-      {k:'itemCount',label:'Items',t:'n',r:r=>`<span class="tag no">${r.itemCount}</span>`},
+      {k:'coverCount',label:'May buy',t:'n',tip:'Catalogue items this customer may buy under the deal',
+        r:r=>r.coverCount?`<span class="tag tl" title="${esc(packEligible(r).join(', '))}">${r.coverCount}</span>`
+          :'<span class="tag warn">none chosen</span>'},
+      {k:'terms',label:'Agreed terms',w:230,r:r=>esc(packTerms(r))},
+      {k:'itemCount',label:'Composed',t:'n',tip:'Lines recorded against the deal, which the figures here are worked out from',
+        r:r=>`<span class="tag no">${r.itemCount}</span>`},
       {k:'listIncl',label:'List inc VAT',t:'n',tip:'Weighted by boxes when a deal mixes items',r:r=>fmtM(r.listIncl)},
       {k:'qty',label:'Boxes',t:'n',r:r=>r.freeBoxes?`${fmtN(r.qty,0)} <span class="mini">(${fmtN(r.freeBoxes,0)} free)</span>`:fmtN(r.qty,0)},
       {k:'pricePerBx',label:'Effective inc VAT',t:'n',r:r=>`<b>${fmtM(r.pricePerBx)}</b>`},
@@ -3265,20 +3343,34 @@ const CFG={
       {k:'landed',label:'Landed / box',t:'n',tip:'Weighted average across the items in this deal',r:r=>fmtM(r.landed)},
       {k:'revenueIncl',label:'Deal revenue',t:'n',r:r=>fmtM(r.revenueIncl)},
       {k:'gpSale',label:'Realised GP%',t:'n',r:r=>gpTag(r.gpSale)}],
-    total:rows=>`<td colspan="4">${rows.length} deals</td><td class="num">${fmtN(sum(rows,'itemCount'),0)}</td><td></td><td class="num">${fmtN(sum(rows,'qty'),0)}</td><td colspan="3"></td><td class="num">${fmtM(sum(rows,'totalCost'))}</td><td class="num">${fmtM(sum(rows,'revenueIncl'))}</td><td class="num">${fmtP(gp(sum(rows,'revEx'),sum(rows,'totalCost')))}</td>`,
+    total:rows=>`<td colspan="4">${rows.length} deals</td><td class="num">${fmtN(sum(rows,'coverCount'),0)}</td><td></td><td class="num">${fmtN(sum(rows,'itemCount'),0)}</td><td></td><td class="num">${fmtN(sum(rows,'qty'),0)}</td><td colspan="3"></td><td class="num">${fmtM(sum(rows,'totalCost'))}</td><td class="num">${fmtM(sum(rows,'revenueIncl'))}</td><td class="num">${fmtP(gp(sum(rows,'revEx'),sum(rows,'totalCost')))}</td>`,
     linkSerial:1,
     form:[{k:'serial',label:'Machine',in:'select',opts:()=>DB.installedBase.map(m=>m.serial),link:1,req:1,wide:1,
         hint:'Account, model, site and status are pulled from the installed base'},
       {k:'company',label:'Account',derived:1},{k:'model',label:'Model',derived:1},{k:'location',label:'Site',derived:1},{k:'active',label:'Machine active',derived:1},
+      {k:'__ph1',label:'What this customer may buy',in:'head',wide:1,
+        hint:'Move every item this deal covers to the right. A pack order priced from the agreement checks that list, so anything left on the left is charged at list price.'},
+      {k:'items',label:'Items covered',in:'codes',wide:1,cats:['Procedure Packs','Consumables'],
+        hint:'usually the whole pack family, not only the sizes ordered so far'},
+
+      {k:'__ph2',label:'The price agreed',in:'head',wide:1},
+      {k:'priceBasis',label:'The price is',in:'select',pairs:()=>PACK_BASIS,def:'pct',req:1},
+      {k:'dealPct',label:'Discount off list (%)',in:'number',whenBasis:'pct',
+        hint:'Applies to every item chosen above, each off its own list price'},
+      {k:'sellingIncl',label:'Agreed price per box (inc VAT)',in:'money',whenBasis:'price',
+        hint:'On an item that lists for less, the same discount is carried over rather than charging above list'},
+
+      {k:'__ph3',label:'The promotion on top',in:'head',wide:1},
       {k:'scheme',label:'Deal structure',in:'select',pairs:()=>PACK_SCHEMES,req:1},
       {k:'promoRule',label:'Promotion rule',when:'free',hint:'e.g. 5+1 — checks the free boxes you record below'},
       {k:'tierQty',label:'Boxes needed for the extra discount',in:'number',when:'tiered',
-        hint:'The customer already buys at the agreed price below; reaching this many boxes earns the next step'},
+        hint:'Reaching this many boxes on an order earns the next step'},
       {k:'tierPct',label:'Extra discount at that volume (%)',in:'number',when:'tiered',
         hint:'Taken off the agreed price, not off list'},
       {k:'tierQty2',label:'Second step — boxes',in:'number',when:'tiered'},
       {k:'tierPct2',label:'Second step — extra discount (%)',in:'number',when:'tiered'},
-      {k:'__lines',label:'Items in this deal',in:'lines',wide:1},
+      {k:'__lines',label:'Boxes composed for this deal',in:'lines',wide:1,
+        hint:'Optional — what was actually taken, which is what the figures in the table are worked out from. Only the items chosen above can be added here.'},
       {k:'note',label:'Deal note',wide:1}]},
   svc:{key:'serviceContract',filters:[{k:'package',label:'Package'},{k:'model',label:'Model'},{k:'warrantyActive',label:'Covered'}],
     compute:r=>{const cost=landedContract(r),ex=exVat(r.revenueIncl),nx=pmNext(r);
@@ -7437,6 +7529,38 @@ function fieldHTML(f,rec){
           Moving this slot and moving that trip are the same thing — change the date here and the trip follows.</div>`
       : `<div class="note">No trip booked yet. <button type="button" class="btn sm" data-triplan="${esc(rec.id)}">Put it on the calendar</button></div>`}</div>`;
   }
+  else if(f.in==='codes'){
+    const sel=asList(cur);
+    const cats=f.cats||['Procedure Packs'];
+    const pool=DB.priceList.filter(p=>cats.includes(p.category)||sel.includes(p.code));
+    const byName=(a,b)=>String(a.category||'').localeCompare(String(b.category||''))
+      ||String(a.name).localeCompare(String(b.name));
+    const row=(p,chosen)=>`<div class="coderow" data-code="${esc(p.code)}"
+        data-find="${esc((p.code+' '+p.name).toLowerCase())}" title="${esc(p.name)}">
+        <span class="mono">${esc(p.code)}</span><span class="cname">${esc(p.name)}</span>
+        <b>${fmtM(p.listIncl)}</b>
+        <span class="codego">${chosen?'−':'+'}</span></div>`;
+    const left=pool.filter(p=>!sel.includes(p.code)).sort(byName);
+    const right=sel.map(c=>pool.find(p=>p.code===c)).filter(Boolean);
+    return `<div class="fld wide"><label>${f.label}</label>
+      <div class="codepick" data-codes="${f.k}">
+        <div class="codepane">
+          <div class="codehead"><b>Catalogue</b>
+            <input class="f codefind" placeholder="Filter…" spellcheck="false">
+            <button type="button" class="btn sm" data-codeall>Add all</button></div>
+          <div class="codelist" data-side="left">${left.map(p=>row(p,0)).join('')}
+            <div class="codeempty" ${left.length?'style="display:none"':''}>Everything here is already chosen</div></div>
+        </div>
+        <div class="codepane chosen">
+          <div class="codehead"><b>This customer may buy</b>
+            <span class="codecount">${sel.length}</span>
+            <button type="button" class="btn sm" data-codenone>Remove all</button></div>
+          <div class="codelist" data-side="right">${right.map(p=>row(p,1)).join('')}
+            <div class="codeempty" ${right.length?'style="display:none"':''}>Nothing chosen yet — pick from the left</div></div>
+        </div>
+      </div>
+      <span class="hint">${f.hint||''}</span></div>`;
+  }
   else if(f.in==='multiloc'){
     const sel=asList(cur);
     const opts=DB.locations.filter(l=>l.id!==rec.locationId)
@@ -7460,7 +7584,7 @@ function fieldHTML(f,rec){
         : 'Nothing attached yet.'}
         <div style="margin-top:8px"><button type="button" class="btn sm" data-adddoc="${esc(kind)}|${esc(rec.id)}">+ Attach a document</button></div></div></div>`;
   }
-  else if(f.in==='head') return `<div class="fld wide fhead" ${f.when?`data-when="${f.when}"`:''}><b>${esc(f.label)}</b>${f.hint?`<span class="hint">${f.hint}</span>`:''}</div>`;
+  else if(f.in==='head') return `<div class="fld wide fhead" ${f.when?`data-when="${f.when}"`:''} ${f.whenBasis?`data-whenbasis="${f.whenBasis}"`:''}><b>${esc(f.label)}</b>${f.hint?`<span class="hint">${f.hint}</span>`:''}</div>`;
   else if(f.in==='docfile'){
     return `<div class="fld wide"><label>${f.label}</label>
       <div class="docfile">
@@ -7488,7 +7612,7 @@ function fieldHTML(f,rec){
   else if(f.in==='money') inp=`<input data-fk="${f.k}" data-money="1" class="money" type="text" inputmode="decimal" value="${fmtAcct(cur)}">`;
   else if(f.in==='textarea') inp=`<textarea data-fk="${f.k}">${val}</textarea>`;
   else inp=`<input data-fk="${f.k}" type="${f.in==='number'?'number':f.in==='date'?'date':'text'}" ${f.in==='number'?'step="any"':''} value="${val}">`;
-  return `<div class="fld ${f.wide?'wide':''}" ${f.when?`data-when="${f.when}"`:''} ${f.whenCase?'data-whencase="1"':''}><label>${f.label}${f.req?' <span style="color:var(--teal)">*</span>':''}${f.derived?` <span class="mini">· ${f.from||'from installed base'}</span>`:''}</label>${inp}${f.hint?`<span class="hint">${f.hint}</span>`:''}</div>`;
+  return `<div class="fld ${f.wide?'wide':''}" ${f.when?`data-when="${f.when}"`:''} ${f.whenBasis?`data-whenbasis="${f.whenBasis}"`:''} ${f.whenCase?'data-whencase="1"':''}><label>${f.label}${f.req?' <span style="color:var(--teal)">*</span>':''}${f.derived?` <span class="mini">· ${f.from||'from installed base'}</span>`:''}</label>${inp}${f.hint?`<span class="hint">${f.hint}</span>`:''}</div>`;
 }
 function livePreview(cfgKey,o){
   if(cfgKey==='pack'){ const d=packRecalc({...o,lines:(lines&&lines.length?lines:o.lines)||[]}), cost=d.boxes?d.totalCost/d.boxes:landedPack(A().purchaseCHF);
@@ -7705,6 +7829,8 @@ function openForm(cfgKey,id,preset){
       o[box.dataset.models]=[...box.querySelectorAll('input:checked')].map(c=>c.value); });
     ov.querySelectorAll('[data-multi]').forEach(box=>{
       o[box.dataset.multi]=[...box.querySelectorAll('input:checked')].map(c=>c.value).join(', '); });
+    ov.querySelectorAll('[data-codes]').forEach(box=>{
+      o[box.dataset.codes]=[...box.querySelectorAll('[data-side="right"] .coderow')].map(r=>r.dataset.code); });
     ov.querySelectorAll('[data-fk]').forEach(i=>{ const v=i.value;
       o[i.dataset.fk]= i.dataset.money ? parseNum(v) : i.type==='number'?(v===''?null:+v):v; });
     ov.querySelectorAll('.seg-pick').forEach(p=>{ const on=p.querySelector('.on'); o[p.dataset.sk]=on?+on.dataset.v:0; });
@@ -7893,13 +8019,18 @@ function openForm(cfgKey,id,preset){
     let dealStepNow=null;
     const curDeals=()=>packDealsFor(accSel.value,locSel.value);
     const paidBoxes=()=>ordLines.filter(l=>!l.free).reduce((s,l)=>s+(+l.qtyEA||0)/10,0);
+    /* a step is earned by the boxes the deal covers, not by items bought
+       outside it */
+    const dealBoxes=()=>{ const deals=curDeals();
+      return ordLines.filter(l=>!l.free&&l.code&&dealQuote(deals,l.code).ex)
+        .reduce((s,l)=>s+(+l.qtyEA||0)/10,0); };
     const schemeIs=v=>((ov.querySelector('[data-fk="scheme"]')||{}).value)===v;
     /* Prices every line from the agreement, with whatever volume step the boxes
        on this order reach taken off on top. Returns the step so the caller can
        tell when crossing a threshold has moved the price. */
     const applyDeal=()=>{
       const deals=curDeals(), gov=dealWithSteps(deals);
-      const st=dealStep(gov,paidBoxes());
+      const st=dealStep(gov,dealBoxes());
       ordLines.forEach(l=>{ if(l.free||!l.code) return;
         const q=dealQuote(deals,l.code); if(!q.ex) return;
         const want=Math.round(q.ex*(1-st.pct/100)*100)/100;
@@ -7941,21 +8072,26 @@ function openForm(cfgKey,id,preset){
       const note=ov.querySelector('#ordNote'), sch=(ov.querySelector('[data-fk="scheme"]')||{}).value;
       if(note){ let msg='Quantity is in EA — 10 EA makes one box', warn=false;
         if(sch==='deal'){
-          const deals=curDeals(), gov=dealWithSteps(deals), st=dealStep(gov,paidBx);
-          const quoted=ordLines.filter(l=>!l.free&&l.code&&dealQuote(deals,l.code).ex).length;
-          const priced=ordLines.filter(l=>!l.free&&l.code).length;
+          const deals=curDeals(), gov=dealWithSteps(deals);
+          const dBx=dealBoxes(), st=dealStep(gov,dBx);
+          const outside=ordLines.filter(l=>!l.free&&l.code&&!dealQuote(deals,l.code).ex);
           if(!deals.length){ msg='No pack agreement covers this customer, so every line is at list. '
               +'Record one on the Pack Agreements page, or price this order by hand.'; warn=true; }
           else {
-            const serials=[...new Set(deals.map(d=>d.serial))].join(', ');
-            msg=`Priced from the agreement on ${serials}`;
+            const d0=deals[0];
+            msg=`${d0.serial} · ${packTerms(d0)}`;
+            if(!packEligible(d0).length){
+              msg+=' · no items are chosen on the agreement yet, so nothing is covered'; warn=true; }
             if(st.steps.length){
               msg+=st.hit
-                ? ` · ${fmtN(paidBx,1)} paid boxes reaches the ${st.hit[1]}% step at ${fmtN(st.hit[0],0)}`
-                : ` · no volume step yet`;
-              if(st.next) msg+=` · ${fmtN(st.next[0]-paidBx,1)} more boxes earns ${st.next[1]}%`;
+                ? ` · ${fmtN(dBx,1)} covered boxes reaches the ${st.hit[1]}% step at ${fmtN(st.hit[0],0)}`
+                : ` · ${fmtN(dBx,1)} covered boxes, no step yet`;
+              if(st.next) msg+=` · ${fmtN(st.next[0]-dBx,1)} more earns ${st.next[1]}%`;
             }
-            if(priced&&quoted<priced){ msg+=` · ${priced-quoted} line${priced-quoted===1?'':'s'} not in the agreement, left at list`; warn=true; }
+            if(outside.length){
+              const names=outside.map(l=>l.code).join(', ');
+              msg+=` · ${names} ${outside.length===1?'is':'are'} not covered by the agreement, charged at list`;
+              warn=true; }
           }
         }
         if(sch==='free'){ const rule=/(\d+)\D+(\d+)/.exec((ov.querySelector('[data-fk="promoRule"]')||{}).value||'');
@@ -8239,15 +8375,64 @@ function openForm(cfgKey,id,preset){
     }
   }
   if(cfgKey==='pack'){
+    const bs=ov.querySelector('[data-fk="priceBasis"]');
+    if(bs&&!rec.priceBasis) bs.value=packBasisOf(rec);
+    if(bs){ const togBasis=()=>ov.querySelectorAll('.fld[data-whenbasis]').forEach(el=>{
+        el.style.display=el.dataset.whenbasis===(bs.value||'pct')?'':'none'; });
+      bs.addEventListener('change',()=>{ togBasis(); refresh(); }); togBasis(); }
+    /* the two-pane item picker: a row moves to the other side when pressed */
+    redrawPackLines=null;
+    const cp=ov.querySelector('[data-codes]');
+    if(cp){
+      const L=cp.querySelector('[data-side="left"]'), R=cp.querySelector('[data-side="right"]');
+      const sortLeft=()=>{ const rows=[...L.querySelectorAll('.coderow')];
+        rows.sort((a,b)=>a.querySelector('.cname').textContent
+          .localeCompare(b.querySelector('.cname').textContent));
+        rows.forEach(r=>L.appendChild(r)); };
+      const paint=()=>{
+        [L,R].forEach(side=>{ const any=side.querySelectorAll('.coderow').length;
+          const e=side.querySelector('.codeempty'); if(e) e.style.display=any?'none':''; });
+        const n=R.querySelectorAll('.coderow').length;
+        const c=cp.querySelector('.codecount'); if(c) c.textContent=n;
+        /* the composed-lines picker only offers what the customer may buy */
+        if(typeof redrawPackLines==='function') redrawPackLines();
+        refresh(); };
+      const move=(row,toRight)=>{ row.querySelector('.codego').textContent=toRight?'−':'+';
+        (toRight?R:L).appendChild(row); if(!toRight) sortLeft(); };
+      cp.addEventListener('click',e=>{
+        const all=e.target.closest('[data-codeall]'), none=e.target.closest('[data-codenone]');
+        if(all||none){ e.preventDefault();
+          [...(all?L:R).querySelectorAll('.coderow')].forEach(r=>{
+            if(all&&r.style.display==='none') return; move(r,!!all); });
+          paint(); return; }
+        const row=e.target.closest('.coderow'); if(!row) return;
+        move(row,row.parentElement===L); paint(); });
+      cp.addEventListener('input',e=>{
+        if(!e.target.classList.contains('codefind')) return;
+        const q=e.target.value.trim().toLowerCase();
+        L.querySelectorAll('.coderow').forEach(r=>{
+          r.style.display=!q||r.dataset.find.includes(q)?'':'none'; });
+        const e2=L.querySelector('.codeempty');
+        if(e2) e2.style.display=[...L.querySelectorAll('.coderow')].some(r=>r.style.display!=='none')?'none':''; });
+      sortLeft(); paint(); }
+  }
+  if(cfgKey==='pack'){
     const scheme=ov.querySelector('[data-fk="scheme"]');
     if(!scheme.value) scheme.value=(rec.scheme||'net');
     lines=(rec.lines||[]).map(l=>({...l,id:l.id||uid()}));
     const toggle=()=>ov.querySelectorAll('.fld[data-when]').forEach(el=>{
+      if(el.dataset.whenbasis) return;
       el.style.display=el.dataset.when===scheme.value?'':'none'; });
     const model=()=>(ov.querySelector('[data-fk="model"]')||{}).value||'';
-    const opts=keep=>catalogueFor('Procedure Packs',model(),keep)
-      .map(p=>({v:p.code,l:p.code+' · '+p.name+(fitsModel(p,model())?'':' ⚠ not listed for this model')}))
-      .sort((a,b)=>a.l.localeCompare(b.l));
+    /* only what the customer may buy can be composed into the deal */
+    const chosenCodes=()=>{ const cp=ov.querySelector('[data-codes]');
+      return cp?[...cp.querySelectorAll('[data-side="right"] .coderow')].map(r=>r.dataset.code)
+              :packEligible(rec); };
+    const opts=keep=>{ const ok=chosenCodes();
+      return catalogueFor('Procedure Packs',model(),keep)
+        .filter(p=>!ok.length||ok.includes(p.code)||p.code===keep)
+        .map(p=>({v:p.code,l:p.code+' · '+p.name+(fitsModel(p,model())?'':' ⚠ not listed for this model')}))
+        .sort((a,b)=>a.l.localeCompare(b.l)); };
     const fitNote=()=>{ const el=ov.querySelector('#fitNotePack'); if(!el) return;
       const m=model(), all=DB.priceList.filter(p=>p.category==='Procedure Packs');
       if(!fitOnly||!modelKey(m)){ el.textContent=''; el.style.color=''; return; }
@@ -8643,7 +8828,8 @@ function openForm(cfgKey,id,preset){
       out.parts=out.partLines.length?`${out.partLines.length} line${out.partLines.length===1?'':'s'} · ${fmtM(t.charge)}`:''; }
     if(cfgKey==='pack'){ out.lines=lines.filter(l=>l.code&&((+l.paidBoxes||0)+(+l.freeBoxes||0))>0)
         .map(l=>({id:l.id,code:l.code,listIncl:+l.listIncl||0,paidBoxes:+l.paidBoxes||0,freeBoxes:+l.freeBoxes||0,discPct:+l.discPct||0,netPrice:+l.netPrice||0}));
-      if(!out.lines.length){ toast('Add at least one item with a box count'); return; }
+      if(!out.lines.length&&!packEligible(out).length){
+        toast('Choose the items this customer may buy, or add a line with a box count'); return; }
       packRecalc(out); }
     if(id){ DB[cfg.key][DB[cfg.key].findIndex(r=>r.id===id)]=touch(out); toast('Record updated'); }
     else { out.id=uid(); DB[cfg.key].push(touch(out)); toast('Record added'); }
