@@ -631,6 +631,19 @@ body.pm-dragging{user-select:none}
   /* the list is held to the width of the screen, so a long part name wraps onto
      a second line instead of running off the side where it cannot be read */
   .cbx-opt{white-space:normal;line-height:1.35;padding:9px 10px}
+  /* Safari sizes a date field from its own internal content and ignores
+     width:100% while the native appearance is on, so the box ran wider than the
+     column and overflow-x:hidden sheared the right border off — the field looked
+     like it had no right-hand side. Switching the appearance off makes it take
+     the width it is given. Left alone on a fine pointer, where the desktop
+     calendar affordance depends on the native appearance. */
+  input[type=date],input[type=month],input[type=time],input[type=datetime-local]{
+    -webkit-appearance:none;appearance:none;min-width:0;max-width:100%}
+  .fld input[type=date],.fld input[type=month],.fld input[type=time]{width:100%}
+  input[type=date]::-webkit-date-and-time-value{text-align:left;margin:0}
+  input[type=date]::-webkit-datetime-edit{padding:0}
+  /* a whole date at 16px needs more than the 104px the other table inputs take */
+  table.lines input[type=date]{width:128px}
 }
 </style>
 
@@ -672,8 +685,8 @@ body.pm-dragging{user-select:none}
      PATCH — a fix or a tweak to what is already there
    The build stamp below stays the tiebreaker: it always moves forward, so the
    "this page is out of date" check compares that rather than the version. */
-const VERSION='2.4.3';
-const BUILD='2026-11-04 21:40';
+const VERSION='2.4.5';
+const BUILD='2026-11-04 22:35';
 const verNum=v=>String(v||'').split('.').map(n=>+n||0);
 /* -1, 0 or 1 — a plain string compare would put 1.10.0 before 1.9.0 */
 function verCmp(a,b){ const x=verNum(a), y=verNum(b);
@@ -8114,7 +8127,9 @@ function enhanceSelects(root){
       list.style.minWidth=w+'px'; list.style.width=w+'px';
       list.style.left=Math.max(vLeft+6,Math.min(r.left,vLeft+vW-w-6))+'px';
       const below=vH-bot-10, above=top-10;
-      const flip=above>below;
+      /* a dropdown belongs under its field; flipping is for when that side is
+         genuinely too cramped to show anything, not merely the smaller of the two */
+      const flip=below<150&&above>below;
       list.style.maxHeight=Math.max(96,Math.min(300,flip?above:below))+'px';
       if(flip){ list.style.top='auto'; list.style.bottom=(window.innerHeight-r.top+3)+'px'; }
       else { list.style.bottom='auto'; list.style.top=(r.bottom+3)+'px'; }
@@ -8133,16 +8148,19 @@ function enhanceSelects(root){
     const choose=i=>{ const o=items[i]; if(!o) return;
       sel.value=o.value; inp.value=o.textContent; list.hidden=true;
       sel.dispatchEvent(new Event('change',{bubbles:true})); };
-    /* the browser scrolls a focused field clear of the keyboard itself, but when
-       the thing that has to scroll is the dialog it sometimes does not, which
-       would leave the list pointing at a field nobody can see */
-    /* scrollIntoView centres the field in the full viewport, half of which is
-       under the keyboard, so the distance is worked out against the part still
-       on screen and taken from whichever ancestors can give it, innermost first */
+    /* The keyboard leaves only a strip of screen, and the field has to end up on
+       it with room underneath for the list. Move it by the LEAST amount that
+       achieves that — centring it, as scrollIntoView would, throws the form
+       hundreds of pixels under the finger and reads as the dialog jumping away.
+       A field that already has room is not moved at all. */
     const reveal=()=>{ const vv=window.visualViewport; if(!vv) return;
-      const want=vv.offsetTop+Math.max(56,vv.height*0.3);
-      let left=inp.getBoundingClientRect().top-want;
-      if(Math.abs(left)<24) return;
+      const r=inp.getBoundingClientRect();
+      const top=vv.offsetTop+8, bot=vv.offsetTop+vv.height-8;
+      const want=Math.max(0,Math.min(236,vv.height-r.height-56));
+      let left=0;
+      if(r.top<top) left=r.top-top;                                  /* above the strip */
+      else if(r.bottom+want>bot) left=Math.min(r.top-top,r.bottom+want-bot);
+      if(Math.abs(left)<8) return;
       for(let n=inp.parentNode;n&&n!==document.body&&Math.abs(left)>1;n=n.parentNode){
         if(n.scrollHeight<=n.clientHeight+2) continue;
         const was=n.scrollTop;
