@@ -685,8 +685,8 @@ body.pm-dragging{user-select:none}
      PATCH — a fix or a tweak to what is already there
    The build stamp below stays the tiebreaker: it always moves forward, so the
    "this page is out of date" check compares that rather than the version. */
-const VERSION='2.4.5';
-const BUILD='2026-11-04 22:35';
+const VERSION='2.4.6';
+const BUILD='2026-11-04 23:10';
 const verNum=v=>String(v||'').split('.').map(n=>+n||0);
 /* -1, 0 or 1 — a plain string compare would put 1.10.0 before 1.9.0 */
 function verCmp(a,b){ const x=verNum(a), y=verNum(b);
@@ -8088,8 +8088,59 @@ function setVVH(){ const v=window.visualViewport;
   else document.documentElement.style.removeProperty('--vvh'); }
 setVVH();
 addEventListener('resize',setVVH); addEventListener('orientationchange',setVVH);
+/* Keeping a focused field on the strip of screen the keyboard leaves. A dialog's
+   body is sized from --vvh, so the moment the keyboard opens it loses a third of
+   its height and whatever has focus can drop out of sight below the fold. The
+   browser then goes looking for it and yanks the form — the lurch that looks like
+   the dialog jumping. Moving the field ourselves, by the LEAST amount that puts it
+   back on screen, leaves nothing for the browser to correct. `room` is space
+   wanted underneath, for a field that opens a list below itself. */
+function scrollParent(el){
+  for(let n=el.parentNode;n&&n!==document.body;n=n.parentNode)
+    if(n.scrollHeight>n.clientHeight+2) return n;
+  return null;
+}
+function keepInView(el,room){
+  const vv=window.visualViewport; if(!vv||!el||!el.getBoundingClientRect) return;
+  const r=el.getBoundingClientRect(); if(!r.height) return;
+  const vTop=vv.offsetTop+8, vBot=vv.offsetTop+vv.height-8;
+  /* two things clip, and the dialog body is usually the tighter: it ends well
+     above the keyboard, so a field sitting between the two looks on screen by the
+     viewport's reckoning while the body has already cut it off */
+  let cTop=vTop, cBot=vBot;
+  const sc=scrollParent(el);
+  if(sc){ const b=sc.getBoundingClientRect();
+    cTop=Math.max(cTop,b.top+4); cBot=Math.min(cBot,b.bottom-4); }
+  const want=Math.max(0,Math.min(room||0,vv.height-r.height-56));
+  let left=0;
+  if(r.top<cTop) left=r.top-cTop;
+  else {
+    /* the field has to clear the body's edge; the list it opens is fixed, so it
+       only has to clear the keyboard */
+    const over=Math.max(r.bottom-cBot,r.bottom+want-vBot);
+    if(over>0) left=Math.min(r.top-cTop,over);
+  }
+  if(Math.abs(left)<8) return;
+  for(let n=el.parentNode;n&&n!==document.body&&Math.abs(left)>1;n=n.parentNode){
+    if(n.scrollHeight<=n.clientHeight+2) continue;
+    const was=n.scrollTop;
+    n.scrollTop=Math.max(0,Math.min(n.scrollHeight-n.clientHeight,was+left));
+    left-=n.scrollTop-was;
+  }
+}
+const roomFor=el=>el&&el.classList&&el.classList.contains('cbx-input')?236:0;
+/* every field in a dialog, not only the ones that open a list */
+addEventListener('focusin',e=>{ const a=e.target;
+  if(!a||!a.closest||!a.closest('.ov')) return;
+  if(!matchMedia('(pointer:coarse)').matches) return;
+  [140,360,700].forEach(t=>setTimeout(()=>{
+    if(document.activeElement===a){ keepInView(a,roomFor(a)); cbxReplace(); } },t));
+});
 if(window.visualViewport){
-  visualViewport.addEventListener('resize',()=>{ setVVH(); cbxReplace(); });
+  visualViewport.addEventListener('resize',()=>{ setVVH();
+    const a=document.activeElement;
+    if(a&&a.closest&&a.closest('.ov')) keepInView(a,roomFor(a));
+    cbxReplace(); });
   visualViewport.addEventListener('scroll',cbxReplace); }
 let wasNarrow=matchMedia('(max-width:620px)').matches;
 addEventListener('resize',()=>{ cbxReplace();
@@ -8148,30 +8199,17 @@ function enhanceSelects(root){
     const choose=i=>{ const o=items[i]; if(!o) return;
       sel.value=o.value; inp.value=o.textContent; list.hidden=true;
       sel.dispatchEvent(new Event('change',{bubbles:true})); };
-    /* The keyboard leaves only a strip of screen, and the field has to end up on
-       it with room underneath for the list. Move it by the LEAST amount that
-       achieves that — centring it, as scrollIntoView would, throws the form
-       hundreds of pixels under the finger and reads as the dialog jumping away.
-       A field that already has room is not moved at all. */
-    const reveal=()=>{ const vv=window.visualViewport; if(!vv) return;
-      const r=inp.getBoundingClientRect();
-      const top=vv.offsetTop+8, bot=vv.offsetTop+vv.height-8;
-      const want=Math.max(0,Math.min(236,vv.height-r.height-56));
-      let left=0;
-      if(r.top<top) left=r.top-top;                                  /* above the strip */
-      else if(r.bottom+want>bot) left=Math.min(r.top-top,r.bottom+want-bot);
-      if(Math.abs(left)<8) return;
-      for(let n=inp.parentNode;n&&n!==document.body&&Math.abs(left)>1;n=n.parentNode){
-        if(n.scrollHeight<=n.clientHeight+2) continue;
-        const was=n.scrollTop;
-        n.scrollTop=Math.max(0,Math.min(n.scrollHeight-n.clientHeight,was+left));
-        left-=n.scrollTop-was;
-      } };
-    /* the keyboard slides in over roughly half a second and the viewport keeps
-       shrinking the whole time, so the list is placed again as it settles */
-    inp.addEventListener('focus',()=>{ inp.select(); render('');
+    /* The keyboard slides in over roughly half a second and the viewport keeps
+       shrinking the whole time, so the list is placed again as it settles.
+       keepInView does the scrolling, shared with every other field in the dialog.
+       Selecting the text is skipped on touch: it makes the browser scroll to show
+       the selection, which fights the placement and is not wanted anyway when the
+       tap was to type a code. */
+    inp.addEventListener('focus',()=>{
+      if(!matchMedia('(pointer:coarse)').matches) inp.select();
+      render('');
       requestAnimationFrame(place); setTimeout(place,120);
-      [320,650].forEach(t=>setTimeout(()=>{ reveal(); place(); },t)); });
+      [320,650].forEach(t=>setTimeout(()=>{ keepInView(inp,236); place(); },t)); });
     inp.addEventListener('input',()=>render(inp.value));
     inp.addEventListener('keydown',e=>{
       if(e.key==='ArrowDown'){ e.preventDefault(); idx=Math.min(items.length-1,idx+1); paint(); }
