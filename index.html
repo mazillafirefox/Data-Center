@@ -601,6 +601,30 @@ body.pm-dragging{user-select:none}
   .modal .body{padding:16px 16px}
   .modal footer{padding:12px 16px}
 }
+
+/* ── last word on field sizes ───────────────────────────────────────────
+   iOS zooms the page in on focus whenever a field's text is under 16px, and
+   it never zooms back out, which left the form panned and half off screen.
+   These mirror the selectors further up so they win by coming last rather
+   than by !important, and they cover the line editors and the search box
+   inside the catalogue picker, which the earlier rule was not specific
+   enough to reach. */
+@media(pointer:coarse){
+  input,select,textarea{font-size:16px}
+  table.lines input,table.lines select,table.lines .cbx-input,
+  .cbx-input,select.searchable,input.qty,input.money,
+  .search input,#q,.f,select.f,input.f,.codefind,
+  /* these carry the highest weight of any field rule, so they are matched
+     exactly rather than hoped past */
+  .ov table input[type=date],.ov table input[type=text],
+  .ov table input[type=number],.ov table select,
+  .ov table .cbx-input,.ov table input.qty{font-size:16px}
+  /* a 16px digit needs more room than a 12px one */
+  table.lines input{width:104px}
+  table.lines input.qty{width:68px}
+  table.lines th{font-size:10.5px}
+  .cbx-list{font-size:15px}
+}
 </style>
 
 <div class="app">
@@ -641,8 +665,8 @@ body.pm-dragging{user-select:none}
      PATCH — a fix or a tweak to what is already there
    The build stamp below stays the tiebreaker: it always moves forward, so the
    "this page is out of date" check compares that rather than the version. */
-const VERSION='2.4.1';
-const BUILD='2026-11-04 19:05';
+const VERSION='2.4.2';
+const BUILD='2026-11-04 20:30';
 const verNum=v=>String(v||'').split('.').map(n=>+n||0);
 /* -1, 0 or 1 — a plain string compare would put 1.10.0 before 1.9.0 */
 function verCmp(a,b){ const x=verNum(a), y=verNum(b);
