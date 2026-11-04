@@ -232,7 +232,11 @@ table.lines tr.line-empty td{color:var(--ink-3);text-align:center;padding:14px 8
 .chosen .coderow .codego{color:var(--ink-3)}
 @media(max-width:760px){ .codepick{grid-template-columns:1fr}
   .codelist{max-height:210px} }
-@media(pointer:coarse){ .coderow{padding:11px 10px;font-size:12.5px}
+@media(pointer:coarse){
+  /* iOS zooms the page in on focus whenever a field's text is below 16px, and
+     zooming back out by hand is awkward. At 16px it simply does not happen. */
+  input,select,textarea,.search input,.f,select.f,input.f{font-size:16px}
+  .coderow{padding:11px 10px;font-size:12.5px}
   .codelist{max-height:300px;min-height:124px}
   .codehead{padding:9px}
   .codehead .codefind{font-size:16px;padding:6px 8px}
@@ -251,6 +255,8 @@ table.lines tr.line-empty td{color:var(--ink-3);text-align:center;padding:14px 8
   table input.money,table input.qty,table input.f,
   input.tierp,input.pin{min-height:34px;font-size:16px}
   .seg-pick button{min-height:34px;padding:7px 13px} }
+.btn.rowmode{display:none}
+@media(max-width:620px){ .btn.rowmode{display:inline-flex} }
 .brand-foot{display:flex;align-items:center;gap:14px;padding:14px 16px}
 .brand-foot img{width:132px;height:auto}
 .fld textarea{min-height:74px;resize:vertical}
@@ -435,6 +441,30 @@ table.orgrid .orpill{display:flex;margin-bottom:3px;font-size:11px}
   .tbl-scroll table.sticky-first tbody tr>td .clamp,.tbl-scroll table.cardify tbody tr>td .clamp{max-width:none!important;-webkit-line-clamp:3}
   .tbl-scroll table.sticky-first tbody tr>td.act,.tbl-scroll table.cardify tbody tr>td.act{
     justify-content:flex-end;gap:10px;padding-top:10px;margin-top:6px;border-top:1px solid var(--line)}
+  /* ── compact list rows ──────────────────────────────────────────────
+     Two lines and a figure, the way a list reads on a phone everywhere
+     else. "Show every field" on the toolbar opens the long form. */
+  .tbl-scroll table[data-role-on] tbody tr{
+    display:flex;flex-wrap:wrap;align-items:baseline;column-gap:8px;row-gap:3px;
+    padding:11px 13px;margin-bottom:7px}
+  .tbl-scroll table[data-role-on] tbody tr>td[data-role]{
+    display:block;padding:0;border:0;text-align:left;white-space:normal;overflow-wrap:anywhere}
+  .tbl-scroll table[data-role-on] tbody tr>td[data-role]::before{content:none}
+  .tbl-scroll table[data-role-on] tbody tr>td[data-role="t"]{
+    order:1;flex:1 1 55%;min-width:0;font-weight:600;font-size:13.5px;line-height:1.3}
+  .tbl-scroll table[data-role-on] tbody tr>td[data-role="v"]{
+    order:2;margin-left:auto;text-align:right;font-size:13px;
+    font-variant-numeric:tabular-nums;white-space:nowrap}
+  /* the supporting facts run together on one line, the way a list reads */
+  .tbl-scroll table[data-role-on] tbody tr>td[data-role="s"]{
+    order:3;flex:1 1 auto;min-width:0;font-size:11.5px;color:var(--ink-3);line-height:1.35}
+  .tbl-scroll table[data-role-on] tbody tr>td[data-role="s"] .subx::before{
+    content:"\00b7";margin:0 6px;color:var(--ink-3)}
+  .tbl-scroll table[data-role-on] tbody tr>td[data-role="s"]:empty{display:none}
+  .tbl-scroll table[data-role-on] tbody tr>td[data-role="rest"]{display:none}
+  .tbl-scroll table[data-role-on] tbody tr>td.act{
+    order:4;margin-left:auto;padding:0;border:0;gap:4px;align-self:center}
+  .tbl-scroll table[data-role-on] tbody tr>td.act .ico-btn{width:32px;height:32px}
   .tbl-scroll table.sticky-first tfoot,.tbl-scroll table.cardify tfoot{display:block}
   .tbl-scroll table.sticky-first tfoot tr,.tbl-scroll table.cardify tfoot tr{display:flex;justify-content:space-between;padding:8px 12px}
   .tbl-scroll table.sticky-first tfoot td,.tbl-scroll table.cardify tfoot td{border:0;padding:0}
@@ -607,8 +637,8 @@ body.pm-dragging{user-select:none}
      PATCH — a fix or a tweak to what is already there
    The build stamp below stays the tiebreaker: it always moves forward, so the
    "this page is out of date" check compares that rather than the version. */
-const VERSION='2.3.1';
-const BUILD='2026-10-26 21:40';
+const VERSION='2.4.0';
+const BUILD='2026-11-04 18:20';
 const verNum=v=>String(v||'').split('.').map(n=>+n||0);
 /* -1, 0 or 1 — a plain string compare would put 1.10.0 before 1.9.0 */
 function verCmp(a,b){ const x=verNum(a), y=verNum(b);
@@ -1998,6 +2028,56 @@ const VIEWS={
    label from data-label. Tables written by hand never carried one, so their
    cells came out unlabelled and squeezed. Rather than editing every table,
    the labels are read off the header row once the page is drawn. */
+/* On a phone every field became its own line, so one price-list entry filled
+   a third of the screen and the 357 of them ran to a hundred-odd screens of
+   scrolling. A list row shows what identifies the record and the one figure
+   you scan for; the rest is a tap away. Per list, by column key. */
+const CARD_COLS={
+  catalog:{t:'name',s:['code','category'],v:'listIncl'},
+  account:{t:'name',s:['type','provinces'],v:'mac_n'},
+  contact:{t:'name',s:['role','account'],v:'site'},
+  location:{t:'name',s:['account','province'],v:'machines'},
+  engineer:{t:'name',s:['role','company'],v:'visits'},
+  base:{t:'serial',s:['model','site'],v:'age'},
+  move:{t:'serial',s:['date','toSite'],v:'reason'},
+  usage:{t:'serial',s:['period','site'],v:'cuts'},
+  pack:{t:'company',s:['serial','terms'],v:'gpAgreed'},
+  orders:{t:'item',s:['period','accountName'],v:'salesEx'},
+  claim:{t:'claimNo',s:['date','accountName'],v:'status'},
+  svc:{t:'company',s:['serial','package'],v:'days'},
+  pmslot:{t:'serial',s:['dueDate','site'],v:'state'},
+  visit:{t:'site',s:['date','type'],v:'status'},
+  pipe:{t:'customer',s:['stage','config'],v:'priceOffer'},
+  market:{t:'hospital',s:['province','femto'],v:'volume'},
+  surg:{t:'surgeon',s:['site','when'],v:'pattern'},
+  doc:{t:'title',s:['kindLabel','docType'],v:'addedOn'}
+};
+/* index of each column key in the drawn header, so the roles can be stamped */
+function cardRoles(list){
+  const cfg=CFG[list]; const want=CARD_COLS[list];
+  if(!cfg||!cfg.cols) return null;
+  const keys=cfg.cols.map(c=>c.k);
+  const at=k=>keys.indexOf(k);
+  if(want){
+    const t=at(want.t), v=at(want.v);
+    const s=(want.s||[]).map(at).filter(i=>i>=0&&i!==t&&i!==v);
+    if(t>=0) return {t,v,s};
+  }
+  /* nothing declared: the key field leads, the last number is the figure */
+  const t=Math.max(0,at(TABLE_KEYS[cfg.key]||''));
+  let v=-1; cfg.cols.forEach((c,i)=>{ if(c.t==='n') v=i; });
+  const s=keys.map((_,i)=>i).filter(i=>i!==t&&i!==v).slice(0,2);
+  return {t,v,s};
+}
+/* phones only: the long form is one tap away, and the choice is remembered */
+const compactOn=()=>{ try{ return localStorage.getItem('ziemer:rows')!=='full'; }catch(e){ return true; } };
+function applyRowMode(root){
+  const on=compactOn();
+  (root||document).querySelectorAll('.tbl-scroll table[data-roles]').forEach(t=>{
+    if(on) t.setAttribute('data-role-on','1'); else t.removeAttribute('data-role-on'); });
+  const b=document.getElementById('rowMode');
+  if(b) b.textContent=on?'Show every field':'Show compact rows';
+}
 function cardifyTables(root){
   (root||document).querySelectorAll('.tbl-scroll table').forEach(t=>{
     const head=t.querySelector('thead tr');
@@ -2012,6 +2092,42 @@ function cardifyTables(root){
         i+=(+td.getAttribute('colspan')||1); });
     });
     if(!t.classList.contains('sticky-first')) t.classList.add('cardify');
+    /* mark what leads the row, what supports it and what the figure is */
+    let roles=t.dataset.list?cardRoles(t.dataset.list):null;
+    if(!roles){
+      /* no list behind it: the first column leads and the last column that
+         holds figures is the one worth showing beside it */
+      const row=t.querySelector('tbody tr');
+      if(row){
+        const cells=[...row.children];
+        const numeric=i=>{ const c=cells[i]; if(!c||c.classList.contains('act')) return false;
+          const s=c.textContent.trim();
+          return !!s&&/^[฿\d\-+(]/.test(s)&&/[\d]/.test(s); };
+        let v=-1; cells.forEach((c,i)=>{ if(i>0&&numeric(i)) v=i; });
+        const s=cells.map((_,i)=>i).filter(i=>i!==0&&i!==v&&!cells[i].classList.contains('act')).slice(0,2);
+        roles={t:0,v,s};
+      }
+    }
+    if(roles) t.setAttribute('data-roles','1');
+    /* Only a phone shows the compact row, and only there are the supporting
+       cells folded into one — the table itself is left untouched elsewhere,
+       and a resize redraws the page from scratch either way. */
+    const narrow=matchMedia('(max-width:620px)').matches;
+    if(roles) t.querySelectorAll('tbody tr').forEach(tr=>{
+      let i=0; const subs=[];
+      [...tr.children].forEach(td=>{
+        const r=i===roles.t?'t':i===roles.v?'v':roles.s.includes(i)?'s':'rest';
+        if(!td.classList.contains('act')){ td.setAttribute('data-role',r); if(r==='s') subs.push(td); }
+        i+=(+td.getAttribute('colspan')||1); });
+      if(narrow&&subs.length>1){
+        const first=subs[0];
+        subs.slice(1).forEach(c=>{
+          const txt=c.textContent.trim();
+          if(txt){ const sp=document.createElement('span');
+            sp.className='subx'; sp.textContent=txt; first.appendChild(sp); }
+          c.setAttribute('data-role','rest'); });
+      }
+    });
   });
 }
 function paintVersion(){
@@ -2067,8 +2183,8 @@ function tableCard(cfg,scope){
   const tf=cfg.total?`<tfoot><tr>${cfg.total(rows)}${anyStamp?'<td></td>':''}<td></td></tr></tfoot>`:'';
   const scoped=scope&&Object.keys(scope).some(k=>!scopeOff[k]&&(!filters[k]||filters[k]==='__all'));
   return `${fbar?`<div class="toolbar">${fbar}<span class="mono mini">${rows.length} records</span>
-    ${scoped?`<span class="tag nv">this month only</span><button class="btn sm" data-scopeall="${esc(Object.keys(scope)[0])}">Show every month</button>`:''}<span class="spacer"></span><button class="btn sm" data-csv="${cfg.key}">Download CSV</button></div>`:''}
-  <div class="card"><div class="tbl-scroll">${rows.length?`<table class="sticky-first"><thead><tr>${th}</tr></thead><tbody>${body}</tbody>${tf}</table>`
+    ${scoped?`<span class="tag nv">this month only</span><button class="btn sm" data-scopeall="${esc(Object.keys(scope)[0])}">Show every month</button>`:''}<span class="spacer"></span><button class="btn sm rowmode" id="rowMode">Show every field</button><button class="btn sm" data-csv="${cfg.key}">Download CSV</button></div>`:''}
+  <div class="card"><div class="tbl-scroll">${rows.length?`<table class="sticky-first" data-list="${esc(cname)}"><thead><tr>${th}</tr></thead><tbody>${body}</tbody>${tf}</table>`
     :`<div class="empty">${(DB[cfg.key]||[]).length
         ?'<b>Nothing matches these filters</b>Clear a filter and the records come back.'
         :`<b>${esc(cfg.emptyTitle||'Nothing here yet')}</b>${esc(cfg.emptyHint||'Press “+ Add record” at the top right to make the first one.')}`}</div>`}</div></div>`;
@@ -7429,7 +7545,7 @@ function render(){
       :page==='analytics'?pageAnalytics():page==='c360'?pageAccounts()
       :page==='surg'?pageSurgeons():page==='claim'?pageClaims():page==='pipe'?pagePipe():page==='market'?pageMarket():page==='price'?pagePrice():page==='data'?pageData()
       :tableCard(CFG[page])+(page==='base'?ageLegend():'');
-    cardifyTables(el);
+    cardifyTables(el); applyRowMode(el);
   }catch(err){ console.error(err);
     el.innerHTML=`<div class="note amber"><b>This page could not be drawn.</b> ${esc(err&&err.message||String(err))}
       <br><span class="mini">Version ${VERSION} · build ${BUILD} · page “${esc(page)}” — send us this line and we can trace the record behind it.</span></div>
@@ -7913,7 +8029,10 @@ const xth=(k,label,n)=>`<th class="${n?'n':''}" data-sortx="${esc(k)}" ${n?'data
 function cbxCleanup(){ document.querySelectorAll('.cbx-list').forEach(l=>{ if(!l._inp||!l._inp.isConnected) l.remove(); }); }
 const cbxReplace=()=>document.querySelectorAll('.cbx-list').forEach(l=>{ if(!l.hidden&&l._place) l._place(); });
 addEventListener('scroll',cbxReplace,true);
-addEventListener('resize',cbxReplace);
+let wasNarrow=matchMedia('(max-width:620px)').matches;
+addEventListener('resize',()=>{ cbxReplace();
+  const n=matchMedia('(max-width:620px)').matches;
+  if(n!==wasNarrow){ wasNarrow=n; render(); } });
 function enhanceSelects(root){
   (root||document).querySelectorAll('select.searchable:not([data-cbx])').forEach(sel=>{
     sel.dataset.cbx='1';
@@ -9366,6 +9485,9 @@ document.addEventListener('click',e=>{
       printSheet(visitSheet(v),'Service report · '+reportNo(v),
         `${v.date||''} Ziemer service report ${v.serial||''} ${l.name||''} ${reportNo(v)}`); }
     return; }
+  if(e.target.id==='rowMode'){
+    try{ localStorage.setItem('ziemer:rows',compactOn()?'full':'compact'); }catch(x){}
+    applyRowMode(); return; }
   if(e.target.id==='verCheck'){ versionProbe(e.target); return; }
   if(e.target.id==='clmList'||e.target.id==='clmReport'){
     const from=ui2.clmFrom||dISO(addMonths(new Date(),-12)), to=ui2.clmTo||dISO(new Date());
