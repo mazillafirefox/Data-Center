@@ -173,13 +173,17 @@ tfoot td{background:var(--card-2);font-weight:600;border-top:2px solid var(--lin
 .seg.h{background:#E9A0A3} .seg.f{background:var(--teal)}
 .meter .pc{font-family:var(--mono);font-size:11.5px;margin-left:7px;color:var(--ink-2)}
 
-.ov{position:fixed;inset:0;background:rgba(11,31,42,.5);backdrop-filter:blur(3px);display:flex;align-items:flex-start;justify-content:center;padding:36px 16px;z-index:100;overflow-y:auto;overflow-x:hidden}
+/* --vvh is the height actually on screen; on a phone the soft keyboard takes a
+   third of it and 100vh does not shrink to match, so the dialog would hang off
+   the bottom with its footer out of reach. Set from visualViewport in script;
+   the 100vh fallback keeps the desktop exactly as it was. */
+.ov{position:fixed;inset:0;height:var(--vvh,100vh);background:rgba(11,31,42,.5);backdrop-filter:blur(3px);display:flex;align-items:flex-start;justify-content:center;padding:36px 16px;z-index:100;overflow-y:auto;overflow-x:hidden}
 .modal{background:var(--card);border-radius:14px;box-shadow:var(--sh-2);width:100%;max-width:min(780px,100%);min-width:0}
 .modal.wide{max-width:min(1080px,100%);overflow:hidden;animation:pop .16s ease-out}
 @keyframes pop{from{opacity:0;transform:translateY(-8px)}}
 .modal header{display:flex;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line)}
 .modal header h3{margin:0;font-size:15px;font-weight:600}
-.modal .body{padding:18px 20px;max-height:66vh;overflow-y:auto;overflow-x:hidden}
+.modal .body{padding:18px 20px;max-height:calc(var(--vvh,100vh)*.66);overflow-y:auto;overflow-x:hidden}
 .modal .fld>.lines-wrap,.modal .fld>.tbl-scroll,.modal .fld>div{min-width:0;max-width:100%}
 .modal footer{display:flex;gap:9px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--line);background:var(--card-2)}
 .fgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px;min-width:0}
@@ -576,7 +580,7 @@ body.pm-dragging{user-select:none}
 @media(max-width:760px){
   .ov{padding:10px 8px;align-items:flex-start}
   .modal{border-radius:12px}
-  .modal .body{max-height:calc(100vh - 150px);overflow-y:auto}
+  .modal .body{max-height:calc(var(--vvh,100vh) - 150px);overflow-y:auto}
   .modal footer{position:sticky;bottom:0;background:var(--card);border-top:1px solid var(--line)}
 }
 @media(max-width:900px){
@@ -624,6 +628,9 @@ body.pm-dragging{user-select:none}
   table.lines input.qty{width:68px}
   table.lines th{font-size:10.5px}
   .cbx-list{font-size:15px}
+  /* the list is held to the width of the screen, so a long part name wraps onto
+     a second line instead of running off the side where it cannot be read */
+  .cbx-opt{white-space:normal;line-height:1.35;padding:9px 10px}
 }
 </style>
 
@@ -665,8 +672,8 @@ body.pm-dragging{user-select:none}
      PATCH — a fix or a tweak to what is already there
    The build stamp below stays the tiebreaker: it always moves forward, so the
    "this page is out of date" check compares that rather than the version. */
-const VERSION='2.4.2';
-const BUILD='2026-11-04 20:30';
+const VERSION='2.4.3';
+const BUILD='2026-11-04 21:40';
 const verNum=v=>String(v||'').split('.').map(n=>+n||0);
 /* -1, 0 or 1 — a plain string compare would put 1.10.0 before 1.9.0 */
 function verCmp(a,b){ const x=verNum(a), y=verNum(b);
@@ -8057,6 +8064,20 @@ const xth=(k,label,n)=>`<th class="${n?'n':''}" data-sortx="${esc(k)}" ${n?'data
 function cbxCleanup(){ document.querySelectorAll('.cbx-list').forEach(l=>{ if(!l._inp||!l._inp.isConnected) l.remove(); }); }
 const cbxReplace=()=>document.querySelectorAll('.cbx-list').forEach(l=>{ if(!l.hidden&&l._place) l._place(); });
 addEventListener('scroll',cbxReplace,true);
+/* The soft keyboard opening and closing shows up only on visualViewport: innerHeight
+   and 100vh both stay at the full screen height while a third of it sits under the
+   keyboard. --vvh carries the height that is really on screen so the dialog can be
+   sized to it. Left unset on a fine pointer, where there is no keyboard to allow for
+   and the 100vh fallback is what has always been used. */
+function setVVH(){ const v=window.visualViewport;
+  const h=(v&&matchMedia('(pointer:coarse)').matches)?Math.round(v.height):0;
+  if(h) document.documentElement.style.setProperty('--vvh',h+'px');
+  else document.documentElement.style.removeProperty('--vvh'); }
+setVVH();
+addEventListener('resize',setVVH); addEventListener('orientationchange',setVVH);
+if(window.visualViewport){
+  visualViewport.addEventListener('resize',()=>{ setVVH(); cbxReplace(); });
+  visualViewport.addEventListener('scroll',cbxReplace); }
 let wasNarrow=matchMedia('(max-width:620px)').matches;
 addEventListener('resize',()=>{ cbxReplace();
   const n=matchMedia('(max-width:620px)').matches;
@@ -8076,18 +8097,25 @@ function enhanceSelects(root){
     let items=[], idx=-1;
     const paint=()=>{ [...list.children].forEach((el,i)=>el.classList.toggle('on',i===idx));
       const el=list.children[idx]; if(el&&el.scrollIntoView) el.scrollIntoView({block:'nearest'}); };
-    /* the field can move under us — focusing a row scrolls the dialog — so the
-       list is placed again on every scroll and resize while it is open */
+    /* the field can move under us — focusing a row scrolls the dialog, and on a
+       phone the soft keyboard covers the bottom half of the screen — so the room
+       on each side is measured against visualViewport, which shrinks with the
+       keyboard while innerHeight does not, and the list is placed again on every
+       scroll and resize while it is open */
     const place=()=>{
       if(list.hidden) return;
       const r=inp.getBoundingClientRect();
-      if(r.bottom<0||r.top>window.innerHeight){ list.hidden=true; return; }
-      const w=Math.max(280,Math.min(420,r.width));
-      list.style.minWidth=w+'px';
-      list.style.left=Math.max(6,Math.min(r.left,window.innerWidth-w-10))+'px';
-      const below=window.innerHeight-r.bottom-12, above=r.top-12;
-      const flip=below<180&&above>below;
-      list.style.maxHeight=Math.max(120,Math.min(300,flip?above:below))+'px';
+      const vv=window.visualViewport;
+      const vTop=vv?vv.offsetTop:0, vLeft=vv?vv.offsetLeft:0;
+      const vH=vv?vv.height:window.innerHeight, vW=vv?vv.width:window.innerWidth;
+      const top=r.top-vTop, bot=r.bottom-vTop;      /* where the field sits on screen */
+      if(bot<-4||top>vH+4){ list.hidden=true; return; }
+      const w=Math.max(240,Math.min(420,Math.max(r.width,240),vW-12));
+      list.style.minWidth=w+'px'; list.style.width=w+'px';
+      list.style.left=Math.max(vLeft+6,Math.min(r.left,vLeft+vW-w-6))+'px';
+      const below=vH-bot-10, above=top-10;
+      const flip=above>below;
+      list.style.maxHeight=Math.max(96,Math.min(300,flip?above:below))+'px';
       if(flip){ list.style.top='auto'; list.style.bottom=(window.innerHeight-r.top+3)+'px'; }
       else { list.style.bottom='auto'; list.style.top=(r.bottom+3)+'px'; }
     };
@@ -8105,8 +8133,27 @@ function enhanceSelects(root){
     const choose=i=>{ const o=items[i]; if(!o) return;
       sel.value=o.value; inp.value=o.textContent; list.hidden=true;
       sel.dispatchEvent(new Event('change',{bubbles:true})); };
+    /* the browser scrolls a focused field clear of the keyboard itself, but when
+       the thing that has to scroll is the dialog it sometimes does not, which
+       would leave the list pointing at a field nobody can see */
+    /* scrollIntoView centres the field in the full viewport, half of which is
+       under the keyboard, so the distance is worked out against the part still
+       on screen and taken from whichever ancestors can give it, innermost first */
+    const reveal=()=>{ const vv=window.visualViewport; if(!vv) return;
+      const want=vv.offsetTop+Math.max(56,vv.height*0.3);
+      let left=inp.getBoundingClientRect().top-want;
+      if(Math.abs(left)<24) return;
+      for(let n=inp.parentNode;n&&n!==document.body&&Math.abs(left)>1;n=n.parentNode){
+        if(n.scrollHeight<=n.clientHeight+2) continue;
+        const was=n.scrollTop;
+        n.scrollTop=Math.max(0,Math.min(n.scrollHeight-n.clientHeight,was+left));
+        left-=n.scrollTop-was;
+      } };
+    /* the keyboard slides in over roughly half a second and the viewport keeps
+       shrinking the whole time, so the list is placed again as it settles */
     inp.addEventListener('focus',()=>{ inp.select(); render('');
-      requestAnimationFrame(place); setTimeout(place,120); });
+      requestAnimationFrame(place); setTimeout(place,120);
+      [320,650].forEach(t=>setTimeout(()=>{ reveal(); place(); },t)); });
     inp.addEventListener('input',()=>render(inp.value));
     inp.addEventListener('keydown',e=>{
       if(e.key==='ArrowDown'){ e.preventDefault(); idx=Math.min(items.length-1,idx+1); paint(); }
