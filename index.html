@@ -179,9 +179,10 @@ tfoot td{background:var(--card-2);font-weight:600;border-top:2px solid var(--lin
 @keyframes pop{from{opacity:0;transform:translateY(-8px)}}
 .modal header{display:flex;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line)}
 .modal header h3{margin:0;font-size:15px;font-weight:600}
-.modal .body{padding:18px 20px;max-height:66vh;overflow-y:auto}
+.modal .body{padding:18px 20px;max-height:66vh;overflow-y:auto;overflow-x:hidden}
+.modal .fld>.lines-wrap,.modal .fld>.tbl-scroll,.modal .fld>div{min-width:0;max-width:100%}
 .modal footer{display:flex;gap:9px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--line);background:var(--card-2)}
-.fgrid{display:grid;grid-template-columns:1fr 1fr;gap:13px;min-width:0}
+.fgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px;min-width:0}
 .fld{display:flex;flex-direction:column;gap:5px;min-width:0}
 .fld.wide{grid-column:1/-1}
 .fld label{font-size:11.5px;font-weight:500;color:var(--ink-2)}
@@ -189,7 +190,8 @@ tfoot td{background:var(--card-2);font-weight:600;border-top:2px solid var(--lin
 .fld input:focus,.fld select:focus,.fld textarea:focus{border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-l)}
 .fld input[data-derived]{background:var(--card-2);color:var(--ink-3);cursor:not-allowed}
 input.money{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
-.lines-wrap{overflow-x:auto;max-width:100%;-webkit-overflow-scrolling:touch}
+.lines-wrap{overflow-x:auto;width:100%;max-width:100%;min-width:0;
+  -webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}
 table.lines{font-size:12px;margin-top:4px}
 table.lines th{position:static;font-size:9.5px;padding:6px 6px;cursor:default}
 table.lines td{padding:5px 6px;white-space:nowrap;vertical-align:middle}
@@ -254,7 +256,9 @@ table.lines tr.line-empty td{color:var(--ink-3);text-align:center;padding:14px 8
   .model-pick input[type=checkbox]{width:19px;height:19px}
   table input.money,table input.qty,table input.f,
   input.tierp,input.pin{min-height:34px;font-size:16px}
-  .seg-pick button{min-height:34px;padding:7px 13px} }
+  .seg-pick button{min-height:34px;padding:7px 13px}
+  .modal footer .btn,.modal footer button{min-height:40px}
+  .modal footer{flex-wrap:wrap;row-gap:8px} }
 .btn.rowmode{display:none}
 @media(max-width:620px){ .btn.rowmode{display:inline-flex} }
 .brand-foot{display:flex;align-items:center;gap:14px;padding:14px 16px}
@@ -583,7 +587,7 @@ body.pm-dragging{user-select:none}
   .nav-item{white-space:nowrap;width:auto}
   .content{padding:16px 14px 50px}
   .top{padding:13px 14px}
-  .fgrid{grid-template-columns:1fr}
+  .fgrid{grid-template-columns:minmax(0,1fr)}
   /* a grid track will happily grow past its container unless told not to, which
      is what dragged every field off the side of a phone once a wide line table
      sat in the same dialog */
@@ -637,8 +641,8 @@ body.pm-dragging{user-select:none}
      PATCH — a fix or a tweak to what is already there
    The build stamp below stays the tiebreaker: it always moves forward, so the
    "this page is out of date" check compares that rather than the version. */
-const VERSION='2.4.0';
-const BUILD='2026-11-04 18:20';
+const VERSION='2.4.1';
+const BUILD='2026-11-04 19:05';
 const verNum=v=>String(v||'').split('.').map(n=>+n||0);
 /* -1, 0 or 1 — a plain string compare would put 1.10.0 before 1.9.0 */
 function verCmp(a,b){ const x=verNum(a), y=verNum(b);
@@ -7777,12 +7781,12 @@ function fieldHTML(f,rec){
       <span class="hint">${sel.length?`${sel.length} model${sel.length===1?'':'s'} selected`:'Nothing ticked means it fits every model'}${rec.forDevices?` · price list says “${esc(rec.forDevices)}”`:''}</span></div>`;
   }
   else if(f.in==='partlines') return `<div class="fld wide"><label>${f.label}</label><div id="partWrap"></div>
-    <div style="display:flex;gap:8px;align-items:center;margin-top:9px">
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:9px">
       <button type="button" class="btn sm" id="addPart">+ Add part</button>
       <span id="partFitBox"></span><span class="hint" id="partNote"></span></div></div>`;
   else if(f.in==='gppanel') return `<div class="fld wide"><label>${f.label}</label><div id="gpWrap"></div></div>`;
   else if(f.in==='lines') return `<div class="fld wide"><label>${f.label}</label><div id="lineWrap"></div>
-    <div style="display:flex;gap:8px;align-items:center;margin-top:9px">
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:9px">
       <button type="button" class="btn sm" id="addLine">+ Add item</button>
       <span id="fitBox"></span>
       <span class="hint" id="fitNotePack"></span>
@@ -7890,11 +7894,11 @@ function fieldHTML(f,rec){
   }
   else if(f.in==='machinecard') return `<div class="fld wide" id="mCard"></div>`;
   else if(f.in==='cfglines') return `<div class="fld wide"><label>${f.label}</label><div id="cfgWrap"></div>
-    <div style="display:flex;gap:8px;align-items:center;margin-top:9px">
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:9px">
       <button type="button" class="btn sm" id="addCfgLine">+ Add item</button>
       <span class="hint" id="cfgNote">Hardware, software, service and training come from the price list</span></div></div>`;
   else if(f.in==='orderlines') return `<div class="fld wide"><label>${f.label}</label><div id="ordWrap"></div>
-    <div style="display:flex;gap:8px;align-items:center;margin-top:9px">
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:9px">
       <button type="button" class="btn sm" id="addOrdLine">+ Add item</button>
       <span class="hint" id="ordNote">Quantity is in EA — 10 EA makes one box</span></div></div>`;
   else if(f.in==='money') inp=`<input data-fk="${f.k}" data-money="1" class="money" type="text" inputmode="decimal" value="${fmtAcct(cur)}">`;
